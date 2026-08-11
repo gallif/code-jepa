@@ -1,0 +1,44 @@
+teacher_name: Qwen/Qwen2.5-Coder-1.5B
+teacher_layer: 14          # mid-ish for 28-layer 1.5B; validate in Exp 0
+max_body_tokens: 512
+max_sig_tokens: 256
+min_body_stmts: 3
+
+# Paths on GPU machine (override with CODE_JEPA_ROOT)
+storage_root: /mnt/storage/users/glifshitz/code-jepa
+data_dir: ${storage_root}/data
+cache_dir: ${storage_root}/cache
+models_dir: ${storage_root}/models
+runs_dir: ${storage_root}/runs
+
+dataset:
+  name: code_search_net
+  language: python
+  target_functions: 30000
+  seed: 42
+
+student:
+  d_model: 512
+  nhead: 8
+  num_layers: 2
+  dropout: 0.1
+
+train:
+  batch_size: 64
+  lr: 3.0e-4
+  weight_decay: 0.01
+  epochs: 20
+  warmup_steps: 200
+  grad_clip: 1.0
+  seed: 42
+  # InfoNCE temperature (learnable init)
+  temperature: 0.07
+
+eval:
+  rank_ks: [1, 5, 10]
+  success_rank10: 0.05
+  success_rank1: 0.01
+  token_ratio_budget: 0.20
+
+# Hardware: use GPUs 2,3 on tzag
+# export CUDA_VISIBLE_DEVICES=2,3

@@ -1,0 +1,25 @@
+name: code_jepa
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pytorch>=2.2
+  - pytorch-cuda=12.1
+  - numpy
+  - pandas
+  - pyarrow
+  - tqdm
+  - pyyaml
+  - scikit-learn
+  - pip:
+      - transformers>=4.44
+      - datasets>=2.20
+      - accelerate>=0.33
+      - faiss-cpu>=1.8
+      - sentencepiece
+      - protobuf
+      - einops
+      - rich

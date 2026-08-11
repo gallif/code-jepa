@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Data / caches / runs (live on shared storage)
+data/
+cache/
+runs/
+models/
+*.npy
+*.faiss
+*.pt
+*.bin
+*.parquet
+*.arrow
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# HuggingFace / torch
+.cache/
+hf_cache/
+**/wandb/
