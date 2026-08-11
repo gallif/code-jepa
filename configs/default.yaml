@@ -12,7 +12,7 @@ models_dir: ${storage_root}/models
 runs_dir: ${storage_root}/runs
 
 dataset:
-  name: code_search_net
+  name: code-search-net/code_search_net
   language: python
   target_functions: 30000
   seed: 42
@@ -24,7 +24,8 @@ student:
   dropout: 0.1
 
 train:
-  batch_size: 64
+  # L40S has ~46GB; bs=256 used ~15GB. Larger bs also helps InfoNCE negatives.
+  batch_size: 512
   lr: 3.0e-4
   weight_decay: 0.01
   epochs: 20

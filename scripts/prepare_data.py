@@ -17,6 +17,21 @@ from code_jepa.ast_split import extract_functions
 from code_jepa.config import load_config
 
 
+def _clean_text(s: str) -> str:
+    """Drop unpaired surrogates so parquet/pyarrow can encode UTF-8."""
+    if not isinstance(s, str):
+        return ""
+    # errors="ignore" strips lone surrogates that break pyarrow
+    return s.encode("utf-8", errors="ignore").decode("utf-8")
+
+
+def _clean_record(rec: dict) -> dict:
+    out = {}
+    for k, v in rec.items():
+        out[k] = _clean_text(v) if isinstance(v, str) else v
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/default.yaml")
@@ -37,7 +52,6 @@ def main():
         cfg["dataset"]["language"],
         split="train",
         streaming=True,
-        trust_remote_code=True,
     )
 
     seen_hash: set[str] = set()
@@ -57,7 +71,7 @@ def main():
             if rec.ast_hash in seen_hash:
                 continue
             seen_hash.add(rec.ast_hash)
-            by_repo[repo].append(rec.to_dict())
+            by_repo[repo].append(_clean_record(rec.to_dict()))
 
     # Flatten with repo-level split
     repos = sorted(by_repo.keys())

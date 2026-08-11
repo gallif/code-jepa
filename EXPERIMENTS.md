@@ -11,9 +11,12 @@
 
 ## Hardware
 
-- Host: `132.66.150.42` (tzag)
-- GPUs: `CUDA_VISIBLE_DEVICES=2,3` (L40S)
-- Storage: `/mnt/storage/users/glifshitz/code-jepa`
+- Host: `132.66.150.42` (tzag), user `glifshitz`
+- GPUs: `CUDA_VISIBLE_DEVICES=2,3` (L40S; ranks 0–1 often busy)
+- Code: `~/repos/code-jepa`
+- Storage / env: `/mnt/storage/users/glifshitz/code-jepa`
+- Activate: `conda activate /mnt/storage/users/glifshitz/code-jepa/env`
+- Local edit copy: `/home/gallif/projects/code-jepa` on X12SPA
 
 ## Runs
 

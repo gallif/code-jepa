@@ -37,13 +37,27 @@ Code checkout: `~/repos/code-jepa`
 
 ## Setup (remote)
 
+Env lives on shared storage (home disk is nearly full):
+
 ```bash
 ssh 132.66.150.42
+conda activate /mnt/storage/users/glifshitz/code-jepa/env
 cd ~/repos/code-jepa
-conda env create -f environment.yml
-conda activate code_jepa
-pip install -e .
+export CUDA_VISIBLE_DEVICES=2,3
+export HF_HOME=/mnt/storage/users/glifshitz/code-jepa/models/hf
+export CODE_JEPA_ROOT=/mnt/storage/users/glifshitz/code-jepa
 ```
+
+Sync code from the login machine (`X12SPA`) after local edits:
+
+```bash
+# from /home/gallif/projects/code-jepa
+tar czf /tmp/code-jepa.tgz --exclude .git --exclude '__pycache__' .
+ssh 132.66.150.42 'cat > /tmp/code-jepa.tgz' < /tmp/code-jepa.tgz
+ssh 132.66.150.42 'cd ~/repos/code-jepa && tar xzf /tmp/code-jepa.tgz && rm /tmp/code-jepa.tgz'
+```
+
+Or: `bash scripts/sync_to_remote.sh` (uses the same pattern).
 
 ## Experiment ladder
 
