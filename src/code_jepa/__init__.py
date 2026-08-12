@@ -1,3 +1,3 @@
-"""Code-JEPA POC: signature → body latent prediction."""
+"""Program JEPA: latent program state via predictive objectives. See PLAN.md."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

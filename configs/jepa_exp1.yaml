@@ -1,0 +1,44 @@
+# Program JEPA Exp 1 — masked latent prediction
+
+storage_root: /mnt/storage/users/glifshitz/code-jepa
+data_dir: ${storage_root}/data
+cache_dir: ${storage_root}/cache
+models_dir: ${storage_root}/models
+runs_dir: ${storage_root}/runs
+
+encoder:
+  model_name: Qwen/Qwen2.5-Coder-0.5B
+  # None / omit → last transformer layer
+  layer: null
+  max_tokens: 512
+
+predictor:
+  d_model: 512
+  nhead: 8
+  num_layers: 8
+  dropout: 0.1
+
+mask:
+  mask_ratio: 0.4
+  min_block: 8
+  max_block: 64
+
+ema:
+  momentum_start: 0.996
+  momentum_end: 1.0
+
+train:
+  batch_size: 8
+  lr_encoder: 1.0e-4
+  lr_predictor: 3.0e-4
+  weight_decay: 0.01
+  epochs: 5
+  warmup_steps: 100
+  grad_clip: 1.0
+  seed: 42
+  # Optional: freeze encoder for a smoke debug of predictor only
+  freeze_encoder: false
+
+eval:
+  # Rough smoke bar — refine after first runs
+  max_batches: 50
