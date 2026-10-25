@@ -5,8 +5,8 @@ Phase 1 (Program JEPA) code is retired to the git-ignored `legacy/` folder and
 preserved at git tag `phase1-final`.
 The collaborator's data example is in [`../data_sample.txt`](../data_sample.txt).
 
-Status: open discussion. Nothing implemented yet. The plan document has not been
-updated with these conclusions.
+Status: folded into [code_jepa_research_plan.md](code_jepa_research_plan.md) after
+the collaborator delivered the full dataset. Nothing implemented yet.
 
 ---
 

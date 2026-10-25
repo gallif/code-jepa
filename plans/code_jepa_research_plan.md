@@ -1,372 +1,288 @@
-# Code-JEPA: Proposed Research Plan
+# Code-JEPA: Research Plan (phase 2)
+
+Updated 2026-10-25 to reflect the collaborator's hierarchical descriptor dataset
+(`/mnt/storage/initzan/hjepa_code/` on tzag, documented in its `DATA_PRINCIPLES.md`).
+Discussion that led here: [discussion_2026-10-25.md](discussion_2026-10-25.md).
 
 ## 1. Goal
 
-Explore whether a code encoder can learn **hierarchical latent representations** of source code, from token-level details to higher-level semantics, using LLM-generated textual descriptions at multiple abstraction levels.
+Test whether a code encoder learns **hierarchical latent representations** of source code, from tokens up to
+program intent, when supervised by LLM-written descriptions that are grounded in code spans at several levels of
+abstraction.
 
-The approach is inspired by hierarchical representation learning, including H-JEPA-style ideas, and latent-space prediction through JEPA. The proposed architecture is a research direction combining these ideas, not an exact reproduction of either method.
+The approach draws on H-JEPA-style hierarchical representation learning and on latent-space prediction (JEPA). It is a
+research direction combining these ideas, not a reproduction of either.
 
-## 2. Core Principles
+## 2. Data
 
-- **Code-only input:** The code encoder receives ordinary source-code tokens. LLM-generated descriptions are training targets, not inputs to the code encoder.
-- **Level 1 is raw code:** The lowest level represents the original code tokens and receives no textual-abstraction supervision in the initial design.
-- **Configurable hierarchy:** The number of levels, `L`, must be configurable.
-- **Learned higher levels:** Higher-level representations are learned latent representations rather than manually supplied AST features.
-- **Modular objectives:** Text alignment and JEPA-style latent prediction are distinct objectives and should be evaluated separately.
-- **Flexible data format:** The data pipeline must support different numbers of levels and descriptions without requiring architectural redesign.
+### 2.1 Source and status
 
-## 3. Proposed Model Architecture
+| Source | Kind | Tests | Verified solutions | Problems |
+|---|---|---|---|---|
+| KodCode-V1 (100k subsample) | function-level tasks | pytest | 74,697 | one solution each |
+| TACO train | competitive programming | stdio / call-based | 25,200 | ≤ 2 solutions each |
+| CodeContests train | competitive programming | stdio | 11,688 | ≤ 2 solutions each |
 
-### 3.1 Recommended starting point
+- Python 3 only. Every solution passes its tests before it is annotated.
+- Decontaminated against HumanEval+, MBPP+, TACO test, and CodeContests valid/test.
+- Annotator: Qwen3.8-27B, one guided-JSON call per sample, written bottom-up (steps → units → approach → intent).
+- **Status (2026-10-25):** CodeContests is annotated (~11.3k records, < 0.1% rejected); TACO and KodCode annotation
+  is still running. Pilots of ~750 records cover all three sources.
+- KodCode is CC-BY-NC, so the combined dataset is for non-commercial research only.
 
-Start with **one shared code Transformer and learned hierarchical pooling**.
+### 2.2 The hierarchy and how it maps onto the model
 
-The architecture consists of:
+The tree's shape (units, steps, line spans) comes from tree-sitter, not the LLM; the LLM only writes the text. Every
+description is therefore tied to a real code span.
 
-1. A tokenizer that converts source code into ordinary code tokens.
-2. A shared Transformer encoder that processes the token sequence.
-3. Level 1, which contains the token-level hidden representations.
-4. Learned pooling or latent-query modules that progressively compress the representations into higher-level latent representations.
-5. Level-specific prediction or alignment heads that connect higher-level representations to corresponding textual descriptions.
+| Model level | Data field | Text | Span | Per program (CodeContests, median / p90 / max) |
+|---|---|---|---|---|
+| Tokens | `L4_code` | none (unsupervised) | each token | ~450 characters median |
+| Step | `L3` steps, `children` | one line of pseudocode with key conditions/formulas | AST block | 5 / 15 / 48 |
+| Unit | `L2_units`, `methods` | responsibility + contract | function / class / method / `main` | 1 / 5 / 32 |
+| Program | `L1_approach` | strategy, data structures, complexity | whole program | 1 |
+| Program | `L0_intent` | the task; must hold for any correct solution | whole program | 1 |
 
-Conceptually:
+In this document, levels are named by these terms, not by number. The dataset uses L0 for the coarsest level, while
+the previous plan used Level 1 for the finest; names avoid that conflict.
+
+### 2.3 Structural facts we measured
+
+These were checked on the full CodeContests annotation plus the pilot_v2 sets.
+
+1. **Each program is a tree, not a fixed number of slots.** Step and unit counts vary widely, so the model cannot use a
+   fixed number of latents per level.
+2. **Units nest.** `main` covers module-level code that surrounds the functions, and classes contain methods. Each
+   line belongs to its *innermost* unit.
+3. **Steps partition a unit's own code.** All lines not covered by a unit's top-level steps are unit headers, blanks,
+   comments, docstrings, imports, or lines of a nested unit. We found no uncovered executable code. Headers and
+   docstrings are assigned to their unit.
+4. **Steps are at most two deep.** Compound statements of 14 lines or more get child steps; 29% of CodeContests programs
+   (10% KodCode, 23% TACO) contain nested steps. A parent step summarises its children.
+5. **Many units have a single top-level step** (≈ 39% across sources). Here the step and unit share a span and differ
+   only in wording (pseudocode vs contract). This is the dataset's main known redundancy.
+6. **Description length** (median words): L0 28, L1 strategy 41, unit 36, step 18.
+7. **Multiple solutions share a problem.** In CodeContests, 4,953 of 6,338 problems have two solutions. Their L0 texts
+   differ in wording (identical in only 5%), so they form natural paraphrase pairs.
+8. **Program length.** Median 23 lines; p90 70; cap 200. Up to 1,024 tokens should cover about 98% of programs
+   (an estimate from character counts; verify with the chosen tokenizer).
+
+### 2.4 Quality signals available
+
+- `quality.flags`: identifier leaks in L0/L1 (~5% of records), over-long text. These are soft; we keep the records but
+  can filter or down-weight them.
+- **Reconstruction test** (pilot_v2, 200 samples): the teacher rewrites code from levels L0..Lk only, and the pass
+  rate rises as levels are added: 30.5% → 41.5% → 61.0% → 65.0%, and never drops in 90% of samples. By source, L0 alone
+  passes in 12% of CodeContests vs 48% of KodCode. Per-record results exist and can be used as sample weights.
+- **L0 contains information not in the code** (from the problem statement). Expect an error floor for the
+  intent level; low intent scores are not evidence of a failed hierarchy.
+
+### 2.5 Issues to fix before training
+
+1. **Cross-source duplicate problems leak across splits.** 5,034 of 6,365 CodeContests problems also appear in TACO
+   under different IDs (both include Codeforces). The collaborator's split hashes `problem_id`, so 215 duplicate groups
+   are split across train and val/test. **Fix:** cluster problems by normalised prompt text across all sources, assign
+   a cluster ID, and re-split by cluster. Merging also gives up to 4 solutions per problem.
+2. **Effective scale is lower than the solution count.** After merging, there are roughly 15k unique competitive
+   problems plus ~75k KodCode tasks.
+3. **The 1% test split is small** (~1k solutions). Consider 2–3% for the cluster-level re-split so that per-level
+   evaluation has enough steps and units.
+
+## 3. Core Principles
+
+- **Code-only input.** The code encoder sees only code tokens. Descriptions are training targets, never inputs.
+- **Tokens are unsupervised.** The token level receives no text loss in the initial design.
+- **The hierarchy follows the data tree.** Higher-level vectors are learned, but each is tied to a node (step, unit,
+  program) and its span. Which node types are supervised is configurable, and so is the depth.
+- **Modular objectives.** Text alignment and JEPA-style latent prediction are separate losses, evaluated separately.
+- **Level distinctness must be shown, not assumed.** Every experiment reports a level-distinctness metric
+  (section 7.2).
+
+## 4. Model Architecture
+
+### 4.1 Main design: shared encoder with span-restricted pooling
 
 ```text
 Source code
-    |
-Tokenizer
-    |
-Shared code Transformer
-    |
-Level 1: token-level representations
-    |
-Learned pooling / latent-query module
-    |
-Level 2: fine-grained latent representations
-    |
-Learned pooling / latent-query module
-    |
-Level 3: intermediate representations
-    |
-        ...
-    |
-Level L: coarse/global representation
+  -> tokenizer -> shared code Transformer -> token states H (N x d)
+  -> step vectors: per leaf step, learned attention pooling over the tokens in its lines
+  -> parent-step vectors: attention pooling over their child step vectors
+  -> unit vectors: attention pooling over their top-level steps (+ header/docstring tokens, + nested-unit vectors)
+  -> program vector: attention pooling over the top-level units
+  -> heads: step, unit, approach (L1), intent (L0)
 ```
 
-### 3.2 Hierarchical representations
+- **Span-restricted pooling.** Each node's pooling attends only to its own children, so the hierarchy is enforced by
+  structure. Each level has its own learned query; pooling weights are shared across nodes of the same type.
+- **The line-to-token map** comes from tokenizer offsets. Each token belongs to exactly one innermost unit, and to at
+  most one leaf step.
+- **Approach and intent are two heads on the one program vector.** They are two views of the same span, not two
+  scales.
+- **Code encoder:** start from a pretrained code encoder (candidates: UniXcoder, CodeT5+ 110M embedding, or a small
+  decoder LM such as Qwen2.5-Coder-0.5B with mean/attention pooling). Fine-tune it rather than train from scratch.
 
-Let the input contain `N` code tokens. The shared Transformer produces:
+### 4.2 Ablation: free latent queries
 
-\[
-H^{(1)} \in \mathbb{R}^{N \times d}
-\]
+Replace span-restricted pooling with a fixed set of free latent queries per level (e.g. 16 → 4 → 1) that can attend
+to all tokens. Match latents to descriptions with Hungarian matching or max-similarity. This tests whether a
+hierarchy *emerges* without span grounding.
 
-where `d` is the hidden dimension.
+### 4.3 Alternatives kept for later
 
-Level 1 contains the token-level code representations. Higher levels are constructed by learned compression modules:
-
-\[
-H^{(l+1)} = \operatorname{Pool}_l(H^{(l)})
-\]
-
-Each pooling module learns which information to retain when converting a lower-level representation into a more compact representation.
-
-For example, with four levels:
-
-| Level | Representation | Text supervision |
-|---|---|---|
-| Level 1 | Original code-token representations | None initially |
-| Level 2 | A set of fine-grained latent vectors | Fine-grained descriptions |
-| Level 3 | A smaller set of intermediate latent vectors | Intermediate descriptions |
-| Level 4 | A global latent vector | Function-level description |
-
-The number of latent vectors at each level is configurable. For example, a model might use `N` token representations at Level 1, 16 latent vectors at Level 2, 4 at Level 3, and 1 at Level 4. These numbers are illustrative, not fixed requirements.
-
-The number of levels `L` must also remain configurable.
-
-### 3.3 Alternative architectures
-
-Three architectural options are worth considering:
-
-**A. Shared Transformer with hierarchical pooling — recommended initially**
-
-- Encodes the code once.
-- Builds higher levels through learned pooling.
-- Relatively simple and computationally efficient.
-- Supports a configurable number of levels.
-
-**B. Separate encoder stages per level**
-
-- Each stage transforms the representations from the previous level.
-- Provides a more explicit hierarchy.
-- Introduces additional architectural complexity.
-
-**C. Parallel multi-scale encoders**
-
-- Separate branches represent the code at different scales.
-- Makes scale-specific representations easy to compare.
-- May produce redundant representations rather than a genuinely hierarchical structure.
-
-The initial prototype should use option A unless implementation constraints or preliminary experiments motivate a different design.
-
-## 4. Training Data and Textual Supervision
-
-For each code sample, collect:
-
-- The original source code.
-- One or more LLM-generated descriptions at different abstraction levels.
-- Optionally, associations between descriptions and specific code spans.
-
-The exact number and definitions of the abstraction levels should be decided with the dataset collaborator. The implementation must support a variable number of levels rather than hard-coding a particular hierarchy.
-
-### 4.1 Illustrative example
-
-Source code:
-
-```python
-def positive_sum(xs):
-    total = 0
-    for x in xs:
-        if x > 0:
-            total += x
-    return total
-```
-
-Possible descriptions:
-
-**Fine-grained level**
-- "Check whether the current element is positive."
-- "Add a positive element to the accumulator."
-
-**Intermediate level**
-- "Iterate through the collection and accumulate only positive elements."
-
-**Coarse or global level**
-- "Calculate the sum of all positive elements in a collection."
-
-These examples illustrate possible abstraction levels. They are not mandatory labels for the final dataset.
-
-### 4.2 Important data-design decision
-
-Descriptions can refer to either:
-
-1. **The entire function at different abstraction levels**, or
-2. **Specific code spans**, such as individual operations or logical blocks.
-
-These choices have different architectural implications.
-
-If every description refers to the entire function, each level receives a different semantic view of the same function. However, intermediate latent representations are not automatically associated with distinct code regions.
-
-If descriptions refer to specific spans, the dataset needs reliable associations between each description and its corresponding code span. The model can then learn representations that are more directly tied to local operations and larger logical units.
-
-This decision should be resolved with the dataset collaborator before finalizing the architecture.
-
-### 4.3 Data quality
-
-LLM-generated descriptions should be checked for:
-
-- Semantic correctness.
-- Relevance to the source code.
-- Appropriate abstraction level.
-- Consistency between descriptions and the underlying code.
-- Duplicate or contradictory descriptions.
-
-Training, validation, and test splits should minimize code leakage. Where practical, separate repositories or projects across splits.
+- Separate encoder stages per level (a more explicit hierarchy, but more parameters).
+- Parallel multi-scale encoders (risk of redundant rather than hierarchical representations).
 
 ## 5. Training Objectives
 
-### 5.1 Multi-level text alignment
+### 5.1 Multi-level text alignment (main objective)
 
-Let:
-
-- \(Z^{(l)}\) denote the code representation at level `l`.
-- \(Y^{(l)}\) denote the embedding of the corresponding textual description.
-- \(P_l\) denote a level-specific projection or prediction head.
-- \(D\) denote a suitable embedding-alignment loss.
-- \(\lambda_l\) denote the weight assigned to level `l`.
-
-The multi-level objective is:
+Let \(z_v\) be the vector of node \(v\) at level \(\ell\), \(P_\ell\) a level head, and \(y_v\) the text embedding of
+its description. The loss sums over all supervised nodes in a batch:
 
 \[
-\mathcal{L}_{\text{text}}
-=
-\sum_{l=2}^{L}
-\lambda_l
-D\left(P_l(Z^{(l)}),Y^{(l)}\right)
+\mathcal{L}_{\text{text}} = \sum_{\ell} \lambda_\ell \, \frac{1}{|V_\ell|} \sum_{v \in V_\ell}
+\operatorname{InfoNCE}\big(P_\ell(z_v),\, y_v;\ \mathcal{N}_v\big)
 \]
 
-The text encoder converts the descriptions into target embeddings. The code encoder does not receive these descriptions as input.
+Negatives \(\mathcal{N}_v\):
 
-Possible alignment losses include contrastive learning objectives and regression-style latent losses. The choice should be explicit and evaluated experimentally.
+- other nodes of the same level in the batch;
+- **hard negatives from the same program at other levels** (a unit's step texts, and the program's approach text for
+  the intent head, and vice versa). This forces levels apart;
+- **same-problem pairs are masked** (other solutions of the same problem cluster), because they share the task. They
+  can instead serve as extra positives for the intent head.
 
-In the initial design, Level 1 receives no textual-abstraction loss. Higher levels receive supervision from their corresponding descriptions.
+Because nodes per program vary, \(\lambda_\ell\) is normalised per node so large programs don't dominate. When a unit
+has a single top-level step (section 2.3 item 5), we keep both targets, but log the step/unit similarity for those
+cases separately.
 
-### 5.2 Optional JEPA-style latent prediction
+### 5.2 Text encoder: frozen vs trainable (open decision)
 
-A separate JEPA-style objective can be introduced to train the model to predict target code representations in latent space.
+- **Frozen** (e.g. a sentence-embedding model): fixed targets. The objective is JEPA-like: the text model is the
+  target encoder, and the code encoder + head is the predictor. A regression loss (cosine/L2) is possible alongside
+  InfoNCE.
+- **Trainable**: CLIP-style. Stronger retrieval, but the targets drift, and the text encoder can merge levels.
 
-A JEPA objective involves a predictor and a target representation, typically produced by a target encoder. It is not simply another name for text alignment.
+Start frozen, because that is closer to the JEPA framing and simpler to analyse; run trainable as an experiment.
 
-The combined objective could be:
+### 5.3 JEPA-style latent prediction (later experiment)
+
+Two options that use the data tree:
+
+- **Masked-span prediction.** An EMA target code encoder encodes the full program; the online encoder sees the
+  program with a step or unit span masked, and a predictor predicts the target node vector of the masked span.
+- **Cross-level prediction**, matching the collaborator's framing (predict level k+1 from level k). A predictor maps a
+  node's children vectors to the parent's target vector (step → unit → program), with stop-gradient/EMA targets.
 
 \[
-\mathcal{L}_{\text{total}}
-=
-\mathcal{L}_{\text{text}}
-+
-\beta \mathcal{L}_{\text{JEPA}}
+\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{text}} + \beta \, \mathcal{L}_{\text{JEPA}}
 \]
 
-where `β` controls the contribution of the latent prediction objective.
+## 6. Experiments
 
-The first prototype should focus on multi-level text alignment. JEPA-style prediction can then be added as a separate experiment to determine whether it provides additional benefits.
+All experiments use the same pretrained code encoder, the same cluster-level split, and the same budget in steps.
 
-Additional hierarchy regularization may be investigated later, but should not be assumed necessary initially.
+| # | Model | Supervision | Purpose |
+|---|---|---|---|
+| 1 | Flat encoder, no text | none (or the encoder's own pretraining) | Reference point |
+| 2 | Flat, mean-pooled | intent + approach only | Code-text supervision without a hierarchy |
+| 3 | Hierarchical (span pooling) | intent + approach only | Does the architecture alone help? |
+| 3a | Hierarchical | same *number* of descriptions as exp 4, all program-level | Controls for more text/gradient per sample |
+| 3b | Hierarchical | program descriptions duplicated at every level | Controls for extra loss terms |
+| 4 | Hierarchical | step + unit + approach + intent | **Main hypothesis** |
+| 5 | As 4 | descriptions shuffled across programs (within level) | Do gains depend on meaningful pairs? |
+| 6 | As 4 | + JEPA objective (section 5.3) | Incremental value of latent prediction |
 
-## 6. Baselines and Experiments
+Ablations on the main model (exp 4):
 
-The following experimental conditions are proposed.
+- Span-restricted pooling vs free latent queries (section 4.2).
+- Drop one level at a time (no steps, no units, no approach).
+- Hard negatives on/off; same-problem masking on/off.
+- Frozen vs trainable text encoder.
+- Filtering by quality flags and reconstruction results vs training on all records.
+- Per source: competitive programming only vs KodCode only vs mixed.
 
-### Experiment 1: Flat code encoder baseline
-
-Train a conventional code encoder without a learned hierarchy.
-
-Purpose: Establish a reference point for downstream performance.
-
-### Experiment 2: Flat code-text alignment
-
-Use a single code representation aligned with function-level textual descriptions.
-
-Purpose: Measure the benefit of code-text supervision without a hierarchy.
-
-### Experiment 3: Hierarchical encoder with global text supervision
-
-Use the hierarchical architecture, but supervise it only with function-level descriptions.
-
-Purpose: Determine whether the hierarchy alone improves performance.
-
-### Experiment 4: Hierarchical encoder with multi-level text supervision
-
-Use the hierarchical architecture with descriptions at multiple abstraction levels.
-
-Purpose: Test the main hypothesis that multi-level supervision produces more useful hierarchical representations.
-
-### Experiment 5: Mismatched-description control
-
-Shuffle or mismatch descriptions between code samples.
-
-Purpose: Check whether improvements depend on meaningful code-description relationships.
-
-### Experiment 6: Hierarchical encoder with JEPA-style prediction
-
-Add the latent prediction objective to the multi-level text-supervised model.
-
-Purpose: Measure the incremental contribution of JEPA-style training.
-
-**Important:** Level 1 within the hierarchical model is not automatically equivalent to a conventional flat encoder baseline. Its representations may depend on different parameters, training losses, and contextual interactions. The flat baseline must therefore remain a separate experimental setup.
+The token level of the hierarchical model is not equivalent to a flat encoder, so exp 1 stays a separate setup.
 
 ## 7. Evaluation
 
-### 7.1 Code-text retrieval
+### 7.1 In-distribution retrieval, per level
 
-Evaluate whether code representations retrieve relevant textual descriptions and vice versa.
+On the cluster-level test split: text → code-node and code-node → text retrieval for steps, units, approach and
+intent (Recall@1/5/10, MRR). For steps and units, retrieve within the same program and across the test set.
 
-Possible metrics:
+### 7.2 Level distinctness
 
-- Recall@1, Recall@5, and Recall@10.
-- Mean reciprocal rank (MRR).
+- **Level-confusion matrix:** for each node, does its vector retrieve its own level's description over the same
+  program's descriptions at other levels?
+- CKA between level representations.
+- Approach vs intent: the program vector's two heads should separate "how" from "what".
 
-### 7.2 Abstraction-level evaluation
+### 7.3 Probes (lightweight, frozen representations)
 
-Where suitable test data are available, evaluate queries and retrieval at different abstraction levels.
+Labels come for free from the data:
 
-For example:
+- Algorithm tags and difficulty (`meta.tags`, `meta.difficulty`, `cf_rating`) from the program vector.
+- Complexity class and key data structures (parsed from `L1_approach`) from the program vector.
+- Step kind (`for` / `if` / `while` / `simple`) from step vectors, as a sanity check.
 
-- Local operation descriptions.
-- Logical block descriptions.
-- Function-level descriptions.
+### 7.4 Beyond the teacher's style
 
-This can help establish whether different levels support different kinds of semantic queries.
+In-distribution retrieval partly rewards learning the teacher's writing style. Add:
 
-### 7.3 Representation probing
+- **Solution-to-solution retrieval:** two solutions of the same problem should be nearest neighbours (no text
+  involved).
+- An external code-search benchmark (CodeSearchNet Python, CoSQA, or AdvTest).
 
-Train lightweight probes on representations from each level to test which information they encode.
+A useful hierarchy is not claimed only from a better downstream score; the distinctness metrics in 7.2 must also
+show that the levels carry different information.
 
-Possible probe tasks include:
+## 8. Implementation
 
-- Identifying local operations.
-- Predicting function behavior.
-- Matching code with descriptions at different abstraction levels.
-- Recovering relevant semantic properties.
-
-### 7.4 Ablation studies
-
-Compare models while varying:
-
-- Number of levels.
-- Number of latent vectors per level.
-- Text-supervision levels.
-- Pooling strategy.
-- Text-alignment loss.
-- Presence or absence of the JEPA objective.
-
-A useful hierarchy should not be claimed solely because the full model achieves a better downstream score. Evidence should also indicate that the levels contain useful and appropriately differentiated information.
-
-## 8. Configuration and Implementation Requirements
-
-The model, data pipeline, loss computation, and evaluation code should all support a configurable number of levels.
-
-Illustrative configuration:
+1. **Loader + validator** for the JSONL format:
+   - flatten the tree into nodes `{level, id, parent, span, text}`;
+   - build the line → token map from tokenizer offsets and assign each token to its innermost unit and leaf step;
+   - check that steps partition each unit's code lines;
+   - drop programs over the token cap and log the drop rate.
+2. **Re-split:** cluster problems across sources by normalised prompt, then split by cluster (section 2.5).
+3. **Text-embedding cache:** embed all descriptions once with the frozen text encoder.
+4. **Model:** encoder + tree pooling with batched segment attention (pad nodes per level, mask by parent index).
+5. **Training/eval scripts** with the level set configurable, e.g.:
 
 ```yaml
 hierarchy:
-  num_levels: 4
-
-  level_1:
-    type: code_tokens
-    text_supervision: false
-
-  higher_levels:
-    type: learned_latent_pooling
-    text_supervision: true
-
+  supervised_levels: [step, unit, approach, intent]
+  pooling: span_restricted     # or free_queries
+  step_depth: 2                # 1 = flatten child steps into parents
 objectives:
-  text_alignment: true
+  text_alignment: {loss: infonce, hard_negatives: true, mask_same_problem: true}
   jepa_prediction: false
+text_encoder: {name: <sentence-embedding model>, frozen: true}
+code_encoder: {name: <pretrained code encoder>, max_tokens: 1024}
 ```
 
-This is an illustrative configuration; exact field names can change during implementation.
+## 9. Next Steps
 
-The implementation should distinguish:
+1. Write the loader/validator and run it over all annotated records.
+2. Build the cross-source problem clusters and the new split; report the leakage removed.
+3. Choose the code encoder and the frozen text encoder; cache the text embeddings.
+4. Train exps 2 and 4 on CodeContests alone (already annotated) to get a first signal.
+5. Add TACO and KodCode when annotation finishes; run the full experiment table and ablations.
+6. Run the JEPA experiments (exp 6).
 
-- **Number of hierarchy levels:** `L`.
-- **Number of latent vectors per level:** A separate configurable parameter.
-- **Number of descriptions per sample and level:** A property of the dataset.
+## 10. Open Questions for the Collaborator
 
-These quantities are not necessarily equal. For example, a level may contain multiple latent vectors and may be supervised by multiple descriptions.
+- Can the pipeline emit a cross-source problem cluster ID (or should we compute it)?
+- Should single-step units be "promoted" (step replaced by its children) in the data, or should we handle it in the
+  loader?
+- Can the reconstruction test be run on more samples (e.g. the whole test split) so we can use it as a per-level
+  quality label?
+- Would a second teacher on a subset be feasible, to measure teacher-style bias?
 
-The following invariant should be maintained:
+## 11. Main Research Hypothesis
 
-- Level 1 represents the raw code-token sequence.
-- Level 1 receives no textual-abstraction supervision in the initial design.
-- Higher levels are learned latent representations.
-- The number and interpretation of higher levels are configurable.
+**Span-grounded, multi-level textual supervision leads a code encoder to learn representations whose levels are
+distinct and individually useful, improving code understanding and retrieval over flat code-text alignment.**
 
-## 9. Immediate Next Steps
-
-1. Decide whether LLM-generated descriptions will refer to entire functions or specific code spans.
-2. Coordinate with the dataset collaborator to determine the available abstraction levels and data format.
-3. Implement a shared code Transformer with learned hierarchical pooling.
-4. Implement multi-level text alignment.
-5. Establish the flat code encoder and flat code-text alignment baselines.
-6. Evaluate retrieval performance and probe the information represented at each level.
-7. Run ablations to determine whether multi-level supervision provides benefits beyond function-level supervision.
-8. Add JEPA-style latent prediction as a separate experiment.
-
-## 10. Main Research Hypothesis
-
-**Multi-level textual supervision may encourage a code encoder to learn latent representations that preserve useful information at different abstraction levels, potentially improving code understanding and retrieval compared with flat code-text alignment.**
-
-This is a hypothesis to test, not an assumed outcome.
-
-The central research challenge is to determine whether the learned levels become meaningfully distinct and useful, rather than simply producing redundant representations of the same code.
+This is a hypothesis to test. The central challenge is showing that the levels become meaningfully distinct, not
+redundant copies of the same program meaning.
