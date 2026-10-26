@@ -1,0 +1,484 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[round,authoryear]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\newcommand{\Lcal}{\mathcal{L}}
+\newcommand{\sg}{\operatorname{sg}}
+\newcommand{\SIGReg}{\operatorname{SIGReg}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\setlist{itemsep=2pt,topsep=4pt}
+
+\title{Hierarchical LLM-JEPA for Code:\\
+Span-Grounded, Multi-Level Representation Learning\\
+with Pretrained Code Language Models\\[0.5em]
+\large Research proposal --- draft of \today}
+\author{Code-JEPA project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We propose to train a pretrained code language model so that its internal representations of a program are
+organised by level of abstraction: individual statement blocks (\emph{steps}), functions and methods (\emph{units}),
+and the whole program, seen both as an algorithmic \emph{approach} (how) and as an \emph{intent} (what). The training
+signal comes from a dataset of 111.5k test-verified Python programs, each annotated with a tree of natural-language
+descriptions whose shape is extracted from the abstract syntax tree, so that every description is grounded in a
+real code span. We treat each level's description as a separate \emph{view} of the program and apply a joint-embedding
+predictive (JEPA) loss at every level of the tree, following the LLM-JEPA recipe for language models and the
+H-JEPA recipe for hierarchies of latent spaces. A single pretrained model encodes code and descriptions and also
+acts as the predictor; the hierarchy is implemented inside the model through one special token per tree node and
+a tree-shaped attention mask. A next-token loss anchors the backbone, and a per-level isotropic-Gaussian regulariser
+(SIGReg) protects the new node embeddings from collapse. We describe the data, the architecture, the losses, the
+experiments and controls, and the evaluation, with emphasis on showing that the learned levels are distinct and
+individually useful rather than redundant copies of program meaning.
+\end{abstract}
+
+% ===========================================================================
+\section{Introduction}
+% ===========================================================================
+
+Programs have an explicit hierarchy: tokens form statements, statements form blocks, blocks form functions, and
+functions combine into a program that implements an algorithm for a task. Code models are usually trained on flat
+token sequences with next-token prediction, and code embedding models usually produce one vector per snippet. Neither
+is asked to represent a program at several levels of abstraction at once, and neither is told which spans of code
+correspond to which level.
+
+Joint-embedding predictive architectures (JEPAs) learn by predicting the \emph{representation} of one view of the data
+from another, rather than reconstructing inputs \citep{lecun2022path,assran2023ijepa}. Two recent lines of work make
+this directly applicable to our setting. LLM-JEPA \citep{huang2025llmjepa} shows that adding a JEPA loss between two
+views of the same sample (for example, a natural-language request and the corresponding code) to the usual
+next-token loss improves fine-tuned language models. H-JEPA \citep{zhang2026hjepa}, which implements the
+hierarchical JEPA proposed by \citet{lecun2022path}, shows how to train a stack of JEPAs end-to-end, each level with
+its own encoder, predictor and latent space, without collapse.
+
+Our collaborator has built a dataset designed for exactly this combination: every program comes with descriptions at
+four levels (intent, approach, unit, step), each tied to an AST span, so that each level is a separate view of the
+same program. This proposal describes how we will use it.
+
+\paragraph{Hypothesis.}
+\emph{Training a pretrained code language model with a JEPA loss at every level of a span-grounded description tree,
+anchored by the next-token loss, produces representations whose levels are distinct and individually useful, and
+improves description-to-code generation and code understanding over regular fine-tuning and flat LLM-JEPA.}
+
+\paragraph{Contributions (planned).}
+\begin{enumerate}
+  \item A hierarchical extension of LLM-JEPA in which one JEPA loss is applied per node of a program's description
+        tree, with the hierarchy implemented inside a pretrained model by node tokens and a tree attention mask.
+  \item A transfer of the H-JEPA training recipe (per-level predictors and losses, SIGReg, no EMA or
+        stop-gradient) from temporal world models to the structural hierarchy of programs.
+  \item An evaluation protocol that tests level distinctness directly (level-confusion matrices, per-level rank,
+        controls for the amount of supervision), alongside generation pass@1 and retrieval.
+\end{enumerate}
+
+% ===========================================================================
+\section{Related work and the principles we adopt}
+\label{sec:related}
+% ===========================================================================
+
+This section acknowledges the work our design draws on and states, for each, which principle we adopt and where it
+appears in our method. Table~\ref{tab:principles} summarises the mapping.
+
+\subsection{JEPA foundations}
+
+\paragraph{A path towards autonomous machine intelligence \citep{lecun2022path}.}
+This position paper introduces JEPAs and the hierarchical JEPA (H-JEPA): a stack of JEPAs in which each level
+encodes the representations of the level below, and higher levels are more abstract and predict over longer ranges.
+It argues for prediction in representation space rather than input space, and for preventing collapse through
+regularisation rather than only contrastive negatives.
+\emph{Adopted:} prediction in representation space, and the idea that each level encodes the representations of the
+level below. In our case the levels are structural (step $\to$ unit $\to$ program) rather than temporal.
+
+\paragraph{I-JEPA \citep{assran2023ijepa} and V-JEPA \citep{bardes2024vjepa}.}
+These works instantiate JEPAs for images and video: a context encoder sees a partially masked input, and a predictor,
+conditioned on the position of the hidden region, predicts the target encoder's representation of that region.
+\emph{Adopted:} masked-region prediction conditioned on the target's position. We use AST nodes as the masked regions
+in an auxiliary, code-only objective (Section~\ref{sec:loss-mask}). We do not adopt their EMA target encoder (see
+H-JEPA below).
+
+\paragraph{VICReg \citep{bardes2022vicreg} and LeJEPA / SIGReg \citep{balestriero2025lejepa}.}
+VICReg prevents collapse with explicit variance and covariance penalties on embeddings. LeJEPA replaces such
+heuristics with SIGReg, a sketched test that pushes the embedding distribution towards an isotropic Gaussian along
+random projections.
+\emph{Adopted:} SIGReg, applied per level to the node embeddings (Section~\ref{sec:loss-dist}). VICReg-style
+penalties remain an alternative.
+
+\subsection{LLM-JEPA}
+
+\paragraph{LLM-JEPA \citep{huang2025llmjepa}.}
+LLM-JEPA adds a JEPA term to language-model fine-tuning on datasets that have two views of the same content, such as
+a natural-language request and its regular expression, SQL query or worked solution. From the paper and its
+reference implementation we take the following elements:
+\begin{itemize}
+  \item \textbf{One shared encoder.} The language model itself embeds both views; the embedding of a view is the
+        last-layer hidden state at its last token. There is no EMA target and no stop-gradient.
+  \item \textbf{The model is also the predictor.} A few special predictor tokens are appended to the first view,
+        and the hidden state of the last one is the prediction; the predictor shares all weights with the encoder.
+  \item \textbf{Loss.} $\gamma\,\Lcal_{\text{LM}} + \lambda\,\bigl(1-\cos(\mathrm{Pred}(\mathrm{Enc}(\text{Text})),
+        \mathrm{Enc}(\text{Code}))\bigr)$, where the next-token loss $\Lcal_{\text{LM}}$ keeps the representations
+        informative and is what prevents collapse.
+  \item \textbf{Practical recipe.} 1--2B-parameter models, learning rate $10^{-5}$, four epochs, $\lambda\in\{0.5,2\}$,
+        zero to two predictor tokens, several seeds; packing both views into one row with a block-diagonal 4D
+        attention mask; random JEPA-loss dropout to reduce compute; and comparisons with regular fine-tuning at equal
+        FLOPs.
+\end{itemize}
+\emph{Adopted:} all of the above, as the core of our method. Our extension is to apply the JEPA loss once per node of
+a description tree instead of once per sample (Sections~\ref{sec:arch} and~\ref{sec:losses}). We also take from its
+ablations the alternatives we compare against: L2, MSE and InfoNCE distances, and the reversed prediction direction.
+
+\paragraph{Semantic Tube Prediction \citep{llmjepa2025stp}.}
+Released in the same repository, this variant embeds a span inside a sequence as the difference of hidden states at
+its boundaries, and asks a span to be predictable from the rest of the sequence.
+\emph{Adopted only as an ablation:} the boundary-difference span embedding. Because such differences telescope (a
+parent span's difference is the sum of its children's), a hierarchy built on them would be trivially additive, so it
+is not our main design.
+
+\subsection{Hierarchical JEPAs}
+
+\paragraph{H-JEPA \citep{zhang2026hjepa}.}
+H-JEPA trains a hierarchy of action-conditioned JEPA world models end-to-end for visual planning. It builds on
+LeWorldModel \citep{maes2026leworldmodel}, uses LeJEPA's SIGReg at every level, and releases its code. Its recipe
+and findings shape several of our choices:
+\begin{itemize}
+  \item \textbf{Each level has its own encoder, predictor and latent space}, and each upper-level encoder reads the
+        lower level's embeddings, not the raw input. Its window encoder pools a variable-length set of lower-level
+        embeddings into one vector with a summary token and a padding mask.
+        \emph{Adopted:} our node tokens read the tokens or nodes one level below; the window encoder is reused in our
+        pooling-head ablation.
+  \item \textbf{A loss per level, summed, trained end-to-end:} $\Lcal^{(\ell)}=\Lcal^{(\ell)}_{\text{pred}}+
+        \lambda_\ell\SIGReg(Z^{(\ell)})$, with gradients from upper levels flowing into lower encoders, no EMA and
+        no stop-gradient. \emph{Adopted:} level-specific predictors and per-level loss weights, SIGReg on every
+        level, and no stop-gradient by default.
+  \item \textbf{SIGReg, not target detachment, prevents collapse.} Without SIGReg, the embeddings collapsed to an
+        effective rank of 1--14 out of 384 whether or not targets were detached. \emph{Adopted:} our new node tokens
+        are not shaped by the next-token loss, so we regularise them with SIGReg and monitor per-level rank.
+  \item \textbf{Slow-feature collapse is an optimum of the prediction loss}, which no regulariser on the marginal
+        distribution can exclude (building on \citet{sobal2022slow}); H-JEPA needed grounded supervision (an
+        inverse-dynamics head) to retain task-relevant information. \emph{Adopted:} our description views serve as
+        that grounding, and code-only prediction is never used without them.
+  \item \textbf{An upper level helps only when the data has structure at that scale}, and stagewise training lets
+        each level train on suitable data. \emph{Adopted:} we report unit-level results separately for multi-unit
+        programs and include stagewise training as an ablation.
+  \item \textbf{The ``HWM'' baseline} uses identity upper-level encoders. \emph{Adopted:} as a control in which a
+        parent's vector is the mean of its children's.
+  \item \textbf{Per-level learning rates.} \emph{Adopted:} a higher rate for newly introduced parameters than for the
+        pretrained backbone.
+\end{itemize}
+H-JEPA lists variable-duration segments and alignment of upper-level latents with language as future work; our AST
+spans and level-wise descriptions provide both.
+
+\subsection{Hierarchical latent prediction in language models}
+
+\paragraph{HiLP \citep{shi2026hilp} and NextLat \citep{teoh2025nextlat}.}
+NextLat adds a next-latent prediction loss to language-model pretraining. HiLP extends it with a second level: a
+sliding-window module summarises the last $k=4$ token states, and an upper predictor forecasts that summary $k$
+tokens ahead, with stop-gradient targets. A combined head predicts the next token from both levels. The hierarchy is
+removed at inference; the goal is better next-token prediction (HumanEval pass@1 rises from 8.8 to 11.3 for 1B models
+trained on 100B tokens).
+\emph{Relation to our work:} closely related in spirit but a different method. HiLP's levels are fixed token windows
+learned without supervision during pretraining, and the levels are not evaluated as representations. Ours are AST
+spans with a description at each level, built on a pretrained model, and the level-wise representations are the
+object of study. Its combined head, which gives the upper level a next-token training signal, is a candidate way to
+anchor our node tokens generatively (an ablation alongside SIGReg).
+
+\subsection{Code representation learning and contrastive alignment}
+
+Contrastive objectives \citep{oord2018cpc}, popularised for paired modalities by CLIP \citep{radford2021clip}, and
+code embedding models such as UniXcoder \citep{guo2022unixcoder} and CodeSage \citep{zhang2024codesage} learn one
+vector per snippet. Our earlier design for this project followed this pattern, with a code encoder aligned to a frozen
+text-embedding model such as BGE \citep{xiao2023cpack}. We keep it as a baseline (B1) and keep InfoNCE with
+other-level hard negatives as an alternative distance.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Principles adopted from prior work and where they appear in our method.}
+\label{tab:principles}
+\begin{tabularx}{\textwidth}{@{}p{3.2cm}YY@{}}
+\toprule
+Work & Principle adopted & Where in our method \\
+\midrule
+\citet{lecun2022path} & Predict in representation space; each level encodes the level below & All JEPA losses; node tokens read the level below (\S\ref{sec:arch}) \\
+\citet{assran2023ijepa,bardes2024vjepa} & Masked-region prediction conditioned on the target's position & Masked-node objective (\S\ref{sec:loss-mask}) \\
+\citet{huang2025llmjepa} & One shared LM encoder and predictor; predictor tokens; LM loss + cosine JEPA loss; packing, loss dropout, equal-FLOP comparison & Core objective (\S\ref{sec:loss-view}), packing (\S\ref{sec:packing}), protocol (\S\ref{sec:experiments}) \\
+\citet{llmjepa2025stp} & Boundary-difference span embedding & Ablation only \\
+\citet{zhang2026hjepa} & Per-level encoder, predictor and loss; end-to-end, no EMA; SIGReg per level; grounding against slow features; HWM and stagewise controls & Node hierarchy, losses (\S\ref{sec:loss-dist}), controls (\S\ref{sec:experiments}) \\
+\citet{balestriero2025lejepa} & SIGReg & Per-level anti-collapse term \\
+\citet{sobal2022slow} & JEPAs favour slow, easy-to-predict features & Masked-node objective is always combined with description views \\
+\citet{shi2026hilp} & Combined head that anchors the upper level with next-token loss & Ablation for anchoring node tokens \\
+\citet{oord2018cpc,radford2021clip} & Contrastive alignment with in-batch negatives & InfoNCE distance option; baseline B1 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ===========================================================================
+\section{Data}
+\label{sec:data}
+% ===========================================================================
+
+\paragraph{Sources.}
+The dataset was built by our collaborator from three sources of test-verified Python solutions:
+CodeContests \citep{li2022alphacode} (11,677 programs, stdio tests, up to two solutions per problem),
+TACO \citep{li2023taco} (25,181 programs) and a 100k subsample of KodCode-V1 \citep{xu2025kodcode} (74,667
+function-level programs with pytest tests), 111.5k programs in total. All solutions pass their tests, and the data is
+decontaminated against HumanEval+ and MBPP+ \citep{chen2021humaneval,liu2023evalplus} and the TACO and CodeContests
+evaluation splits. KodCode's licence restricts the combined data to non-commercial research.
+
+\paragraph{The description tree.}
+The shape of each tree is extracted deterministically with tree-sitter \citep{treesitter}; a teacher LLM then writes
+one description per node, bottom-up, in a single guided-JSON call. The levels are listed in
+Table~\ref{tab:levels}. Each level must be strictly more abstract than the one below it, and descriptions follow what
+the code does rather than the problem statement.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Levels of the description tree. Every description is tied to an AST span.}
+\label{tab:levels}
+\begin{tabularx}{\textwidth}{@{}lYl@{}}
+\toprule
+Level & Description & Span \\
+\midrule
+Intent & What problem is solved; must hold for any correct solution & whole program \\
+Approach & Algorithmic strategy, key data structures, time and space complexity & whole program \\
+Unit & Responsibility and contract (inputs, outputs, edge cases) & function, class, method, or \texttt{main} \\
+Step & One line of pseudocode with key conditions and formulas; long blocks get child steps & AST block \\
+Code & The verified solution & tokens \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Measured properties that constrain the design.}
+\begin{itemize}
+  \item A program has 7--8 nodes at the median (steps, units and the two program-level nodes), 25--46 at the 99th
+        percentile, and at most 81, so the model cannot use a fixed number of latent slots.
+  \item 63--74\% of programs consist of a single unit, so the unit and program levels usually cover the same span;
+        12--21\% have a single unit with a single step, so three levels share one span and differ only in text.
+  \item About 39\% of units have a single top-level step. Steps nest at most two deep.
+  \item In CodeContests, 4,953 of 6,338 problems have two solutions, which gives a natural second view of the same
+        intent.
+  \item All descriptions of a program total about 330 tokens at the median and 1,300 at the 99th percentile; code is
+        about 150 and 1,100 tokens respectively (estimates to be confirmed with the tokenizer).
+  \item The intent level contains information from the problem statement that is not in the code, so intent-level
+        scores have an error floor.
+\end{itemize}
+
+\paragraph{Splits and quality signals.}
+5,034 of 6,365 CodeContests problems also appear in TACO under different identifiers, so we cluster problems by
+normalised statement across sources and split by cluster (2--3\% for test). Soft quality flags (about 5\% of
+records) can be used for filtering or down-weighting. In a reconstruction test on 200 samples, the teacher's pass
+rate when rewriting code from the descriptions rises from 30.5\% (intent only) to 65.0\% (all levels).
+
+% ===========================================================================
+\section{Method}
+\label{sec:arch}
+% ===========================================================================
+
+\subsection{Backbone}
+We fine-tune Qwen2.5-Coder \citep{hui2024qwen25coder}: the 0.5B model for development and the 1.5B base model as
+the main backbone. This is the size range validated by LLM-JEPA, and full fine-tuning fits on a single 46\,GB GPU.
+With about 111k programs and one million supervised nodes, our data is larger than the fine-tuning sets used by
+LLM-JEPA. A 7B model with LoRA is an optional upper bound.
+
+\subsection{Code view: node tokens with a tree attention mask}
+After the code tokens we append one special token per node of the tree, in bottom-up order. A 4D attention mask,
+applied at every layer, restricts what each token sees:
+\begin{itemize}
+  \item code tokens use normal causal attention over earlier code tokens;
+  \item a leaf step token sees the code tokens in its lines;
+  \item a parent step token sees its own header tokens and its child step tokens;
+  \item a unit token sees its header, docstring and import tokens, its top-level step tokens, and nested unit tokens;
+  \item two program tokens, \texttt{<approach>} and \texttt{<intent>}, each see all top-level unit tokens.
+\end{itemize}
+Each node token takes the position of the last token of its span. The code-side embedding $c_v$ of node $v$ is a
+per-level projection head (a two-layer MLP to 256 dimensions) applied to the last-layer state of its token. Separate
+approach and intent tokens are needed so that ``how'' and ``what'' have separate targets. Because code tokens are
+causal, a span's tokens also carry context from earlier code; a node still reads only its own span. This is H-JEPA's
+``each level encodes the level below'', implemented inside the pretrained network with all layers shared, using
+LLM-JEPA's additive-mask mechanism. The code view never attends to descriptions.
+
+\subsection{Description views and predictors}
+Each description is a separate segment that attends only to itself, followed by $k\in\{0,1,2\}$ predictor tokens
+specific to its level. The prediction $p_v$ is the last-layer state of the final predictor token, passed through the
+same level's projection head. Level-specific predictor tokens give one predictor per level, as in H-JEPA, while all
+weights are shared, as in LLM-JEPA.
+
+\subsection{Packing}
+\label{sec:packing}
+Each training sample becomes two rows. The \emph{LM row} contains the intent and approach as a prompt followed by the
+code, with next-token loss on the code tokens. The \emph{view row} contains the code with its node tokens followed by
+every description segment, under a block-diagonal mask. The view row is about 550 tokens at the median and 2,600 at
+the 99th percentile; we cap it at 3,072 tokens, use length-bucketed batches, and apply random JEPA-loss dropout to
+skip the view row on a fraction of steps.
+
+\subsection{How the architecture follows the data}
+Variable node counts are handled by one token per node, with no fixed slots. Nested steps and nested units are
+handled by masks that let a parent read its children. Because most programs have a single unit, results are reported
+separately for single-unit and multi-unit programs, and masked-unit prediction is applied only to programs with at
+least two units. Masked-step prediction skips single-step units, where the context would be empty. Multiple
+solutions per problem provide a cross-solution view (Section~\ref{sec:loss-xsol}). The tests attached to every
+program provide a generation metric.
+
+% ===========================================================================
+\section{Losses}
+\label{sec:losses}
+% ===========================================================================
+
+Let $V_\ell$ be the nodes of level $\ell\in\{\text{step},\text{unit},\text{approach},\text{intent}\}$ in a batch and
+$d(\cdot,\cdot)$ the JEPA distance.
+
+\subsection{Next-token anchor (from LLM-JEPA)}
+\begin{equation}
+\Lcal_{\text{LM}} = -\sum_t \log p_\theta\bigl(\text{code}_t \mid \text{intent}, \text{approach}, \text{code}_{<t}\bigr).
+\end{equation}
+The prompt matches a realistic generation setting and the collaborator's reconstruction test.
+
+\subsection{Same-node view loss (main objective)}
+\label{sec:loss-view}
+\begin{equation}
+\Lcal_{\text{view}} = \sum_{\ell} \lambda_\ell \frac{1}{|V_\ell|} \sum_{v\in V_\ell} d\bigl(p_v, c_v\bigr).
+\end{equation}
+The direction is description $\to$ code, as in LLM-JEPA, with no stop-gradient by default.
+
+\subsection{Level-to-level chain (collaborator's framing)}
+Whole levels as views, each predicting the next one down:
+\begin{equation}
+\begin{split}
+\Lcal_{\text{chain}} ={}& d\bigl(P(\text{intent}), E(\text{approach})\bigr)
+ + d\bigl(P(\text{approach}), E(\text{units})\bigr)\\
+ &+ d\bigl(P(\text{units}), E(\text{steps})\bigr)
+ + d\bigl(P(\text{steps}), c_{\text{program}}\bigr).
+\end{split}
+\end{equation}
+This is run as a separate experiment, since its views are whole levels rather than span-tied nodes.
+
+\subsection{Masked-node prediction (code only)}
+\label{sec:loss-mask}
+For each program we sample one step, and one unit if there are at least two. In an extra copy of the code, the
+sampled node's tokens are hidden, and a level-specific predictor token at the node's position predicts its clean
+embedding:
+$\Lcal_{\text{mask}} = \sum_{\ell\in\{\text{step},\text{unit}\}} d\bigl(\hat c^{\,\text{masked}}_v, c_v\bigr)$.
+Following H-JEPA, there is no stop-gradient or EMA by default. Because of slow-feature collapse, this objective is
+only added on top of the view loss.
+
+\subsection{Cross-solution intent prediction}
+\label{sec:loss-xsol}
+For two solutions $A$ and $B$ of the same problem:
+$\Lcal_{\text{xsol}} = d\bigl(P_{\text{intent}}(c^{A}_{\text{intent}}), c^{B}_{\text{intent}}\bigr)$.
+It applies only to intent, since approaches may legitimately differ.
+
+\subsection{Distance and anti-collapse}
+\label{sec:loss-dist}
+The default is the LLM-JEPA cosine distance plus H-JEPA's per-level SIGReg on the projected node embeddings:
+\begin{equation}
+\Lcal = \gamma\Lcal_{\text{LM}} + \lambda\Lcal_{\text{view}} + \beta\Lcal_{\text{mask}} + \eta\Lcal_{\text{xsol}}
+ + \sum_\ell \mu_\ell \SIGReg\bigl(\{c_v\}_{v\in V_\ell}\bigr).
+\end{equation}
+SIGReg is applied after the projection head so that it does not distort the backbone's pretrained geometry. The
+alternatives are cosine only (LLM-JEPA as published), MSE with SIGReg (H-JEPA as published), and InfoNCE with
+temperature 0.07, whose negatives are the other same-level nodes in the batch and the same program's nodes at other
+levels; same-problem pairs are masked.
+
+\subsection{Starting hyperparameters}
+$\gamma=1$, $\lambda\in\{0.5,2\}$, $k\in\{0,1,2\}$, backbone learning rate $10^{-5}$ and $5\cdot10^{-5}$ for new
+parameters, four epochs, JEPA-loss dropout 0.5, $\beta=\eta=0.5\lambda$, and $\mu_\ell=0.1$ swept over
+$\{0.03,0.1,0.3\}$.
+
+% ===========================================================================
+\section{Experiments}
+\label{sec:experiments}
+% ===========================================================================
+
+All runs use the same backbone and cluster-level split, with three seeds for the main comparisons. Following
+LLM-JEPA, comparisons with regular fine-tuning are reported both at equal steps and at equal FLOPs.
+
+\begin{table}[h]
+\centering
+\small
+\caption{Planned experiments.}
+\label{tab:experiments}
+\begin{tabularx}{\textwidth}{@{}llYY@{}}
+\toprule
+& Name & Losses & Question \\
+\midrule
+E0 & Zero-shot backbone & none & Reference for every metric \\
+E1 & Regular fine-tuning & LM & LLM-JEPA's baseline \\
+E2 & Flat LLM-JEPA & LM + view loss on approach and intent & Direct port of the reference recipe \\
+E3 & Chain LLM-JEPA & LM + chain loss & The collaborator's framing \\
+E4 & \textbf{Hierarchical LLM-JEPA} & LM + view loss at all levels, tree mask, SIGReg & \textbf{Main hypothesis} \\
+E5 & E4 + masked nodes & + $\Lcal_{\text{mask}}$ & Value of code-only prediction \\
+E6 & E4 + cross-solution & + $\Lcal_{\text{xsol}}$ & Value of multi-solution views \\
+B1 & Encoder + frozen text targets & InfoNCE, no LM & Previous single-vector design \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Controls on E4.}
+Descriptions shuffled within each level; the same number of descriptions, all at program level (to control for the
+amount of supervision); free node tokens that see all code (to test span grounding); dropping one level at a time;
+HWM-style upper levels (parent = mean of children); and stagewise training (the step level on all programs, then
+upper levels on multi-unit programs only).
+
+\paragraph{Ablations.}
+Distance options and SIGReg weight; projection head versus raw hidden states; stop-gradient; number of predictor
+tokens; $\lambda$; prediction direction; prompt depth for the LM loss; pooling heads (with H-JEPA's window encoder)
+and boundary-difference spans instead of node tokens; a HiLP-style combined head; quality filtering; and training
+per source.
+
+% ===========================================================================
+\section{Evaluation}
+\label{sec:evaluation}
+% ===========================================================================
+
+\paragraph{Generation.} pass@1 on the test split from the intent-and-approach prompt and from the intent alone, run
+against each program's tests and reported by source.
+
+\paragraph{Representations per level.}
+Retrieval from description to node and from node to description (Recall at 1, 5 and 10, and MRR), within a program and across the test
+set; a \emph{level-confusion matrix} measuring whether a node retrieves its own level's description over the same
+program's descriptions at other levels, reported separately for single-unit and multi-unit programs; per-level
+standard deviation and effective rank of $c_v$ and $p_v$; the fit and singular-value spectrum of a linear map from
+description to code embeddings per level, following the representation analysis in LLM-JEPA; and CKA between levels
+\citep{kornblith2019cka}.
+
+\paragraph{Probes and transfer.}
+Linear probes on frozen program embeddings for algorithm tags, difficulty, rating, complexity class and data
+structures; step-kind probes on step embeddings as a sanity check; solution-to-solution retrieval; and an external
+code-search benchmark (CodeSearchNet \citep{husain2019codesearchnet}, CoSQA \citep{huang2021cosqa}, or AdvTest from
+CodeXGLUE \citep{lu2021codexglue}) to check for more than matching the teacher's writing style.
+
+% ===========================================================================
+\section{Risks and open questions}
+% ===========================================================================
+
+\begin{itemize}
+  \item \textbf{Level redundancy.} Most programs have a single unit, so unit and program nodes often share a span.
+        Distinctness must be demonstrated with the confusion matrix and controls, not assumed.
+  \item \textbf{Collapse of node embeddings.} Node tokens receive no next-token gradient. SIGReg and rank monitoring
+        address this; a HiLP-style combined head is the fallback.
+  \item \textbf{Teacher style.} In-distribution retrieval partly rewards the teacher's phrasing; external benchmarks and
+        code-only evaluations guard against this.
+  \item \textbf{Intent floor.} Intent contains information that is not in the code, which bounds intent-level scores.
+\end{itemize}
+
+\section*{Acknowledgements}
+We thank our collaborator for designing and generating the hierarchical code description dataset, including its
+AST-grounded tree extraction, test verification, decontamination and reconstruction study. We thank the authors of
+LLM-JEPA and H-JEPA for releasing their code, which this design follows closely.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
