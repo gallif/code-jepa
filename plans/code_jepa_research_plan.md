@@ -145,6 +145,16 @@ its levels are not evaluated as representations. We differ in using AST spans in
 description views per level, and a pretrained backbone, and in making level-wise representations the object of
 study. HiLP lists a dynamic lookahead horizon as future work, which our spans provide.
 
+Also related, also a different method: NCM, Next-Concept Modeling (Kumbong et al.,
+[arXiv:2610.14162](https://arxiv.org/abs/2610.14162), code at [HazyResearch/ncm](https://github.com/HazyResearch/ncm)).
+It is a fast coarse-to-fine text generator: a multiscale residual VQ-VAE turns text into K levels of discrete codes
+with fixed lengths, and a transformer trained from scratch generates the levels in parallel. Its levels have no
+attached meaning, and it uses no JEPA loss and no code evaluation. We take three ideas from it:
+- **Nested dropout:** a random prompt depth for the LM loss (section 6.1), compared against the fixed prompt.
+- **Intervention probes:** fix, swap or perturb program-level embeddings and inspect the generated code. This needs
+  generation conditioned on node embeddings (the HiLP-style combined head).
+- **Residual coding:** an ablation where a child's embedding is its parent's plus a learned residual.
+
 ### 3.2 LLM-JEPA (Huang, LeCun, Balestriero, 2025), as implemented in `finetune.py`
 
 Verified in the reference code:

@@ -193,6 +193,22 @@ spans with a description at each level, built on a pretrained model, and the lev
 object of study. Its combined head, which gives the upper level a next-token training signal, is a candidate way to
 anchor our node tokens generatively (an ablation alongside SIGReg).
 
+\paragraph{Next-Concept Modeling \citep{kumbong2026ncm}.}
+NCM is a fast, non-autoregressive text generator. A multiscale residual VQ-VAE encodes text into $K$ levels of
+discrete codes, from a few coarse codes to one per token, each level encoding the residual left by the coarser ones.
+A transformer, trained from scratch, then generates the levels coarse to fine, predicting all codes of a level in
+parallel. Its levels are resolution levels with fixed lengths and no attached meaning, and it does not use JEPA
+objectives or evaluate on code, so it is a different method with a different goal.
+\emph{Adopted:} two ideas. First, \emph{nested dropout}: the tokenizer is trained on reconstructions from a random
+number of coarse levels, so that coarse levels must carry useful information on their own. Our analogue is to
+condition the next-token loss on a random prefix of the description levels (intent; plus approach; plus units; plus
+steps), which we evaluate against the fixed intent-and-approach prompt. Second, its \emph{intervention probes}: fixing
+coarse codes and resampling fine ones, mixing the coarse codes of two inputs, and perturbing a few coarse codes,
+then inspecting what changes in the output. We adapt these to programs when generation is conditioned on our node
+embeddings (Section~\ref{sec:evaluation}). Its residual coding, which makes levels non-redundant by construction,
+motivates a residual parameterisation of child nodes as an ablation. Like H-JEPA and HiLP, NCM lists an
+input-dependent hierarchy as future work; our AST-derived trees provide one.
+
 \subsection{Code representation learning and contrastive alignment}
 
 Contrastive objectives \citep{oord2018cpc}, popularised for paired modalities by CLIP \citep{radford2021clip}, and
@@ -218,6 +234,7 @@ Work & Principle adopted & Where in our method \\
 \citet{balestriero2025lejepa} & SIGReg & Per-level anti-collapse term \\
 \citet{sobal2022slow} & JEPAs favour slow, easy-to-predict features & Masked-node objective is always combined with description views \\
 \citet{shi2026hilp} & Combined head that anchors the upper level with next-token loss & Ablation for anchoring node tokens \\
+\citet{kumbong2026ncm} & Nested dropout over levels; intervention probes on coarse levels; residual coding & Random prompt depth (\S\ref{sec:loss-anchor}); intervention probes (\S\ref{sec:evaluation}); residual ablation \\
 \citet{oord2018cpc,radford2021clip} & Contrastive alignment with in-batch negatives & InfoNCE distance option; baseline B1 \\
 \bottomrule
 \end{tabularx}
@@ -340,10 +357,14 @@ Let $V_\ell$ be the nodes of level $\ell\in\{\text{step},\text{unit},\text{appro
 $d(\cdot,\cdot)$ the JEPA distance.
 
 \subsection{Next-token anchor (from LLM-JEPA)}
+\label{sec:loss-anchor}
 \begin{equation}
 \Lcal_{\text{LM}} = -\sum_t \log p_\theta\bigl(\text{code}_t \mid \text{intent}, \text{approach}, \text{code}_{<t}\bigr).
 \end{equation}
-The prompt matches a realistic generation setting and the collaborator's reconstruction test.
+The prompt matches a realistic generation setting and the collaborator's reconstruction test. Following the nested
+dropout of NCM \citep{kumbong2026ncm}, we also evaluate a variant in which each sample's prompt is a random prefix of
+the description levels (intent; plus approach; plus units; plus steps), so that coarser descriptions must suffice on
+their own.
 
 \subsection{Same-node view loss (main objective)}
 \label{sec:loss-view}
@@ -433,9 +454,10 @@ upper levels on multi-unit programs only).
 
 \paragraph{Ablations.}
 Distance options and SIGReg weight; projection head versus raw hidden states; stop-gradient; number of predictor
-tokens; $\lambda$; prediction direction; prompt depth for the LM loss; pooling heads (with H-JEPA's window encoder)
-and boundary-difference spans instead of node tokens; a HiLP-style combined head; quality filtering; and training
-per source.
+tokens; $\lambda$; prediction direction; prompt depth for the LM loss, fixed or random (NCM-style nested dropout);
+pooling heads (with H-JEPA's window encoder) and boundary-difference spans instead of node tokens; a HiLP-style
+combined head; a residual parameterisation in which a child's embedding is its parent's plus a learned residual
+(after NCM); quality filtering; and training per source.
 
 % ===========================================================================
 \section{Evaluation}
@@ -458,6 +480,13 @@ Linear probes on frozen program embeddings for algorithm tags, difficulty, ratin
 structures; step-kind probes on step embeddings as a sanity check; solution-to-solution retrieval; and an external
 code-search benchmark (CodeSearchNet \citep{husain2019codesearchnet}, CoSQA \citep{huang2021cosqa}, or AdvTest from
 CodeXGLUE \citep{lu2021codexglue}) to check for more than matching the teacher's writing style.
+
+\paragraph{Intervention probes.}
+Adapted from NCM's analysis of its hierarchy \citep{kumbong2026ncm}, and applicable when code generation is
+conditioned on node embeddings (the HiLP-style combined-head variant): keep a program's intent and approach
+embeddings fixed and resample the code; swap the approach embeddings of two solutions of the same problem; and
+perturb a single program-level embedding. A useful hierarchy should change the algorithm when the approach changes,
+while preserving the task and passing the same tests when only lower levels are resampled.
 
 % ===========================================================================
 \section{Risks and open questions}
