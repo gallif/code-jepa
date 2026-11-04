@@ -57,6 +57,20 @@ def test_unit_attends_to_its_step_tokens_not_other_unit(tokenizer, cfg):
     assert packed.view_mask[packed.node_seq_pos[by_id["intent"]], step_u0].item() < 0
 
 
+def test_flat_program_nodes_see_all_code(tokenizer, cfg):
+    original = list(cfg.hierarchy.node_levels)
+    cfg.hierarchy.node_levels = ["approach", "intent"]
+    try:
+        packed = pack_record(_record(), tokenizer, cfg)
+        assert {n.level for n in packed.nodes} == {"approach", "intent"}
+        n_code = packed.extra["n_code"]
+        for pos in packed.node_seq_pos:
+            row = packed.view_mask[pos, :n_code]
+            assert (row == 0).all()
+    finally:
+        cfg.hierarchy.node_levels = original
+
+
 def test_descriptions_are_block_diagonal(tokenizer, cfg):
     packed = pack_record(_record(), tokenizer, cfg)
     n_nodes = len(packed.nodes)

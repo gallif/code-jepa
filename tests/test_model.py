@@ -25,6 +25,23 @@ def test_tiny_forward_finite(cfg, tokenizer):
     assert torch.isfinite(grad).all()
 
 
+def test_e1_skips_view_loss(cfg, tokenizer):
+    original = (cfg.objectives.view.weight, cfg.objectives.sigreg.weight)
+    cfg.objectives.view.weight = 0.0
+    cfg.objectives.sigreg.weight = 0.0
+    try:
+        backbone = build_tiny_backbone(len(tokenizer))
+        model = HierarchicalCodeJEPA(cfg, tokenizer, backbone=backbone)
+        model.train()
+        dataset = HierarchicalJsonlDataset(FIXTURE, tokenizer, cfg, split=None)
+        batch = collate_packed([dataset[0]], tokenizer.pad_token_id)
+        losses = model.compute_losses(batch)
+        assert losses["view"].item() == 0.0
+        assert "pred" not in losses
+    finally:
+        cfg.objectives.view.weight, cfg.objectives.sigreg.weight = original
+
+
 def test_view_shapes(cfg, tokenizer):
     backbone = build_tiny_backbone(len(tokenizer))
     model = HierarchicalCodeJEPA(cfg, tokenizer, backbone=backbone)

@@ -155,8 +155,10 @@ def pack_record(
     cfg: ExperimentConfig,
 ) -> PackedExample:
     code = record.get("L4_code") or record.get("code") or ""
-    nodes = flatten_record(record, step_depth=cfg.hierarchy.step_depth)
-    warnings = validate_tree(code, nodes)
+    nodes_all = flatten_record(record, step_depth=cfg.hierarchy.step_depth)
+    warnings = validate_tree(code, nodes_all)
+    allowed_levels = set(cfg.hierarchy.node_levels)
+    nodes = [n for n in nodes_all if n.level in allowed_levels] if allowed_levels else nodes_all
     record_id = str(record.get("id") or record.get("problem_id") or "")
 
     if len(nodes) > cfg.hierarchy.max_nodes:
@@ -264,12 +266,15 @@ def pack_record(
 
     for node, seq_i in zip(nodes, node_seq_pos):
         mask[seq_i, seq_i] = 0.0
-        allowed_lines = _allowed_code_lines(node, nodes_by_id)
-        for line in allowed_lines:
-            for tok_i in tokens_on_line.get(line, []):
-                mask[seq_i, tok_i] = 0.0
-        for nid in _allowed_node_ids(node):
-            if nid in id_to_seq:
+        child_ids = [nid for nid in _allowed_node_ids(node) if nid in id_to_seq]
+        if node.level in ("approach", "intent") and not child_ids:
+            mask[seq_i, :n_code] = 0.0
+        else:
+            allowed_lines = _allowed_code_lines(node, nodes_by_id)
+            for line in allowed_lines:
+                for tok_i in tokens_on_line.get(line, []):
+                    mask[seq_i, tok_i] = 0.0
+            for nid in child_ids:
                 mask[seq_i, id_to_seq[nid]] = 0.0
 
     for start, end in desc_spans:

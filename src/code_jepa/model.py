@@ -150,34 +150,49 @@ class HierarchicalCodeJEPA(nn.Module):
         )
         return outputs.loss
 
-    def compute_losses(self, batch: dict) -> dict[str, torch.Tensor]:
+    def _level_active(self, name: str) -> bool:
+        allowed = self.cfg.objectives.view.levels
+        return allowed is None or name in allowed
+
+    def compute_losses(self, batch: dict, with_embeddings: bool = False) -> dict[str, torch.Tensor]:
         cfg = self.cfg.objectives
         device = batch["view_input_ids"].device
         zero = torch.zeros((), device=device)
-        losses = {"lm": zero, "view": zero, "sigreg": zero}
+        losses: dict[str, torch.Tensor] = {"lm": zero, "view": zero, "sigreg": zero}
         apply_view = True
         if self.training and cfg.jepa_dropout > 0:
             apply_view = torch.rand((), device=device) >= cfg.jepa_dropout
+        need_view = with_embeddings or (apply_view and cfg.view.weight > 0)
 
-        if apply_view and cfg.view.weight > 0:
+        pred = target = None
+        if need_view:
             pred, target = self.view_forward(batch)
             valid = batch["valid_nodes"]
             level_ids = batch["level_ids"]
             view_terms = []
-            for i, _level in enumerate(LEVEL_NAMES):
+            for i, level in enumerate(LEVEL_NAMES):
+                if not self._level_active(level):
+                    continue
                 sel = valid & (level_ids == i)
                 if sel.any():
-                    view_terms.append(pairwise_distance(pred[sel], target[sel], cfg.view.distance))
+                    term = pairwise_distance(pred[sel], target[sel], cfg.view.distance)
+                    losses[f"view_{level}"] = term
+                    view_terms.append(term)
             if view_terms:
                 losses["view"] = torch.stack(view_terms).mean()
             if cfg.sigreg.weight > 0:
                 sig_terms = []
-                for i, _level in enumerate(LEVEL_NAMES):
+                for i, level in enumerate(LEVEL_NAMES):
+                    if not self._level_active(level):
+                        continue
                     sel = valid & (level_ids == i)
                     if sel.sum() >= 2:
                         sig_terms.append(self.sigreg(target[sel].float()))
                 if sig_terms:
                     losses["sigreg"] = torch.stack(sig_terms).mean()
+            if with_embeddings:
+                losses["pred"] = pred
+                losses["target"] = target
 
         if cfg.lm.weight > 0:
             losses["lm"] = self.lm_forward(batch)

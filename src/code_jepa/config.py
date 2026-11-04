@@ -84,6 +84,7 @@ class ViewObjective:
     distance: str = "cosine"
     stop_grad_target: bool = False
     direction: str = "text_to_code"
+    levels: list[str] | None = None
 
 
 @dataclass
@@ -128,6 +129,7 @@ class TrainConfig:
     seed: int = 82
     output_dir: str = "runs/code_jepa"
     log_every: int = 10
+    eval_every: int = 400
     save_every: int = 500
     num_workers: int = 0
     max_grad_norm: float = 1.0
@@ -137,7 +139,9 @@ class TrainConfig:
 class DataConfig:
     jsonl: str = ""
     split: str | None = "train"
+    eval_split: str | None = "val"
     max_samples: int | None = None
+    eval_max_samples: int | None = None
 
 
 @dataclass
