@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-jepa"
+version = "0.1.0"
+description = "Code-JEPA: hierarchical code representations with multi-level text supervision"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch>=2.2",
+  "transformers>=4.44",
+  "datasets>=2.20",
+  "accelerate>=0.33",
+  "numpy",
+  "pandas",
+  "pyarrow",
+  "tqdm",
+  "pyyaml",
+  "scikit-learn",
+  "faiss-cpu>=1.8",
+  "einops",
+  "rich",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

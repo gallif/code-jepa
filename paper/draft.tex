@@ -277,20 +277,106 @@ Code & The verified solution & tokens \\
 \end{tabularx}
 \end{table}
 
-\paragraph{Measured properties that constrain the design.}
-\begin{itemize}
-  \item A program has 7--8 nodes at the median (steps, units and the two program-level nodes), 25--46 at the 99th
-        percentile, and at most 81, so the model cannot use a fixed number of latent slots.
-  \item 63--74\% of programs consist of a single unit, so the unit and program levels usually cover the same span;
-        12--21\% have a single unit with a single step, so three levels share one span and differ only in text.
-  \item About 39\% of units have a single top-level step. Steps nest at most two deep.
-  \item In CodeContests, 4,953 of 6,338 problems have two solutions, which gives a natural second view of the same
-        intent.
-  \item All descriptions of a program total about 330 tokens at the median and 1,300 at the 99th percentile; code is
-        about 150 and 1,100 tokens respectively (estimates to be confirmed with the tokenizer).
-  \item The intent level contains information from the problem statement that is not in the code, so intent-level
-        scores have an error floor.
-\end{itemize}
+\subsection{Measured properties that constrain the design}
+\label{sec:data-constraints}
+The numbers in Table~\ref{tab:data-stats} were measured on the full annotation of each source. They rule out several
+otherwise natural designs and dictate how we encode the tree, how we weight the losses, and how we interpret the
+results.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Tree shape and length, measured on the full annotation. Node counts include steps, units, and the two
+program-level nodes. CC is CodeContests. Token estimates are from word and character counts and will be replaced by
+tokenizer lengths in the loader.}
+\label{tab:data-stats}
+\begin{tabularx}{\textwidth}{@{}lYYYY@{}}
+\toprule
+& CC & TACO & KodCode & Design consequence \\
+\midrule
+Programs & 11{,}677 & 25{,}181 & 74{,}667 & \\
+Nodes / program (median / p90 / p99 / max)
+  & 8 / 21 / 46 / 81 & 7 / 17 / 42 / 76 & 7 / 13 / 25 / 67
+  & Variable-size node set; no fixed latent slots \\
+Single-unit programs
+  & 63\% & 65\% & 74\%
+  & Unit and program usually share a span \\
+One unit and one step
+  & 12\% & 21\% & 16\%
+  & Three levels share a span; only the text differs \\
+Units with a single top-level step
+  & 39\% & 40\% & 37\%
+  & Step and unit often share a span \\
+Programs with nested steps
+  & 29\% & 23\% & 10\%
+  & Depth at most 2; parent steps exist \\
+All descriptions, words (median / p99)
+  & 235 / 911 & 209 / 862 & 172 / 550
+  & $\approx$330 / 1{,}300 tokens of text views \\
+Code, characters (median / p99)
+  & 454 / 3{,}741 & 387 / 3{,}297 & 624 / 2{,}275
+  & $\approx$150 / 1{,}100 code tokens \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Variable-size trees, not a fixed latent budget.}
+The number of nodes per program ranges from a handful to 81. A design with a fixed number of queries per level
+(for example 16 steps, 4 units, 1 program) would either waste slots on typical programs or truncate the long tail.
+We therefore allocate one token per node, cap at 96 nodes, and pad within a batch. Because node counts vary, the
+view loss is averaged per node within each level so that large programs do not dominate the gradient.
+
+\paragraph{Most programs are a single unit.}
+In 63--74\% of programs the unit and the program describe the same span of code. In 12--21\% there is also only one
+step, so intent, approach, unit and step all cover the same lines and differ only in wording (task, strategy,
+contract, pseudocode). This is the central threat to the hypothesis: without extra pressure, the four embeddings can
+collapse to one program vector. We therefore (i)~give approach and intent separate tokens rather than two heads on
+one vector, and use each as a hard negative for the other; (ii)~report retrieval, confusion and probes separately
+for single-unit and multi-unit programs, so that gains on the minority of multi-unit programs are not hidden;
+(iii)~run masked-unit prediction only when there are at least two units, otherwise the context of the masked node
+is empty; (iv)~include an HWM-style control in which a parent is the mean of its children, and a residual ablation
+in which a child's embedding is its parent's plus a learned offset. H-JEPA's finding that an upper level helps only
+when the data has structure at that scale \citep{zhang2026hjepa} is the reason for this split.
+
+\paragraph{Steps almost partition units, and nest at most twice.}
+About 39\% of units have a single top-level step, so those two descriptions share a span. We keep both targets but
+log their embedding similarity separately, so that easy alignment on paraphrases of the same block is not counted as
+evidence of a hierarchy. Compound statements of 14 lines or more receive child steps; a parent step summarises its
+children, and no program has more than two levels of steps. The tree mask therefore has a parent-step token that
+reads child-step tokens, with an option to flatten depth~2 into depth~1. Steps cover each unit's own executable
+lines: uncovered lines are headers, blanks, comments, docstrings, imports, or lines of a nested unit, and are
+assigned to that unit. Units themselves nest (\texttt{main} surrounds module-level code; classes contain methods),
+and each line belongs to its innermost unit. The mask follows this nesting rather than treating units as a flat list.
+
+\paragraph{Approach and intent are two views of one span.}
+Both are written for the whole program. They are not two scales, so they must not share a code-side target: a single
+program vector pulled toward both ``what'' and ``how'' would mix the two. Two tokens with the same mask, two
+predictor heads, and mutual hard negatives are the corresponding design.
+
+\paragraph{Several solutions share a problem.}
+In CodeContests, 4{,}953 of 6{,}338 problems have two solutions; after merging with TACO, a cluster can have up to
+four. Their intent texts describe the same task (identical wording in only about 5\% of pairs) while the approaches
+may differ. Same-problem pairs are therefore masked as negatives in the contrastive option, and they supply
+(i)~a code-to-code view for cross-solution intent prediction, (ii)~a free evaluation of solution-to-solution
+retrieval, and (iii)~the swap probe in which two approaches to the same task are exchanged.
+
+\paragraph{The packed sequence fits, and the text views are short.}
+Median description lengths are 28 words (intent), 41 (approach), 36 (unit) and 18 (step). Code plus all descriptions
+is about 550 tokens at the median and 2{,}600 at the 99th percentile of CodeContests, so a 3{,}072-token cap on the
+view row should drop well under 1\% of programs (to be confirmed with the Qwen tokenizer). Length-bucketed batches
+keep the 4D mask tractable. The LM row is shorter still: the default prompt is only intent and approach.
+
+\paragraph{Intent is not a function of the code.}
+The intent is written from the problem statement and must hold for any correct solution. It names objects
+(``jumps'', ``tags'', ``phone numbers'') that need not appear in the identifiers. Low intent-level retrieval or
+generation from intent alone is therefore not evidence that the hierarchy failed; the reconstruction study already
+shows the floor (intent alone rewrites to passing code in 12\% of CodeContests samples versus 48\% of KodCode).
+Generation pass@1 is reported by source and by prompt depth for this reason.
+
+\paragraph{Every program has tests.}
+All solutions were verified before annotation. The tests give a generation metric (pass@1 against the record's
+harness) that does not depend on matching the teacher's phrasing, which in-distribution retrieval otherwise
+rewards.
 
 \paragraph{Splits and quality signals.}
 5,034 of 6,365 CodeContests problems also appear in TACO under different identifiers, so we cluster problems by
@@ -341,12 +427,9 @@ the 99th percentile; we cap it at 3,072 tokens, use length-bucketed batches, and
 skip the view row on a fraction of steps.
 
 \subsection{How the architecture follows the data}
-Variable node counts are handled by one token per node, with no fixed slots. Nested steps and nested units are
-handled by masks that let a parent read its children. Because most programs have a single unit, results are reported
-separately for single-unit and multi-unit programs, and masked-unit prediction is applied only to programs with at
-least two units. Masked-step prediction skips single-step units, where the context would be empty. Multiple
-solutions per problem provide a cross-solution view (Section~\ref{sec:loss-xsol}). The tests attached to every
-program provide a generation metric.
+Section~\ref{sec:data-constraints} lists the constraints and the corresponding choices: one token per node; a tree
+mask that follows nested steps and nested units; separate reporting and masked prediction on multi-unit programs;
+two program-level tokens; a cross-solution view; and pass@1 against the attached tests.
 
 % ===========================================================================
 \section{Losses}

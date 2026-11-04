@@ -1,0 +1,56 @@
+backbone:
+  name: Qwen/Qwen2.5-Coder-0.5B
+  cache_dir: models/hf
+  local_files_only: false
+  lora: false
+  dtype: bf16
+  grad_checkpointing: true
+  attn_implementation: eager
+hierarchy:
+  node_levels: [step, unit, approach, intent]
+  node_encoding: tree_mask
+  step_depth: 2
+  max_nodes: 96
+  max_row_tokens: 3072
+predictor:
+  tokens_per_level: 1
+  level_specific: true
+objectives:
+  lm:
+    weight: 1.0
+    prompt: [intent, approach]
+  view:
+    weight: 0.5
+    distance: cosine
+    stop_grad_target: false
+    direction: text_to_code
+  chain: false
+  masked_nodes:
+    enabled: false
+    levels: [step, unit]
+    target: no_detach
+  cross_solution: false
+  sigreg:
+    weight: 0.1
+    num_proj: 1024
+    knots: 17
+  jepa_dropout: 0.5
+projection_head:
+  dim: 256
+  layers: 2
+train:
+  lr_backbone: 1.0e-5
+  lr_new_params: 5.0e-5
+  epochs: 4
+  batch_size: 1
+  grad_accum: 8
+  seed: 82
+  output_dir: runs/code_jepa
+  log_every: 10
+  save_every: 500
+  num_workers: 0
+  max_grad_norm: 1.0
+data:
+  jsonl: tests/fixtures/sample.jsonl
+  split: null
+  max_samples: null
