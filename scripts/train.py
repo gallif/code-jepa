@@ -118,9 +118,18 @@ def main() -> None:
     parser.add_argument("--eval-only", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--tiny", action="store_true", help="random 2-layer Qwen2, for smoke tests")
+    parser.add_argument(
+        "--override",
+        nargs="*",
+        default=[],
+        help="dotted key=value overrides, e.g. objectives.sigreg.weight=1.0",
+    )
     args = parser.parse_args()
 
     cfg = ExperimentConfig.load(args.config)
+    if args.override:
+        cfg.apply_dot_overrides(args.override)
+        print("overrides:", args.override)
     if args.data:
         cfg.data.jsonl = args.data
     if args.max_samples is not None:

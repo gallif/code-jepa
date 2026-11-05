@@ -99,6 +99,7 @@ class SigregConfig:
     weight: float = 0.1
     num_proj: int = 1024
     knots: int = 17
+    bank_size: int = 0
 
 
 @dataclass
@@ -166,3 +167,38 @@ class ExperimentConfig:
         cfg = cls()
         _update(cfg, raw)
         return cfg
+
+    def apply_dot_overrides(self, items: list[str]) -> "ExperimentConfig":
+        for item in items:
+            if "=" not in item:
+                raise ValueError(f"override must be key=value, got {item!r}")
+            key, text = item.split("=", 1)
+            parts = key.split(".")
+            obj = self
+            for part in parts[:-1]:
+                obj = getattr(obj, part)
+            current = getattr(obj, parts[-1])
+            setattr(obj, parts[-1], _coerce_override(text, current))
+        return self
+
+
+def _coerce_override(text: str, current):
+    lowered = text.lower()
+    if lowered in {"null", "none"}:
+        return None
+    if isinstance(current, bool):
+        return lowered in {"1", "true", "yes"}
+    if isinstance(current, list):
+        return [part.strip() for part in text.split(",") if part.strip()]
+    if isinstance(current, int) and not isinstance(current, bool):
+        return int(float(text))
+    if isinstance(current, float):
+        return float(text)
+    if "," in text:
+        return [part.strip() for part in text.split(",") if part.strip()]
+    try:
+        if "." in text or "e" in lowered:
+            return float(text)
+        return int(text)
+    except ValueError:
+        return text

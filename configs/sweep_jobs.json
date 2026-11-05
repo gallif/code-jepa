@@ -1,0 +1,60 @@
+{
+  "base_config": "configs/tzag_e4.yaml",
+  "common": [
+    "train.eval_every=200",
+    "train.save_every=10000",
+    "train.log_every=20",
+    "train.max_steps=1200",
+    "objectives.sigreg.num_proj=1024"
+  ],
+  "jobs": [
+    {
+      "name": "bank256",
+      "overrides": ["objectives.sigreg.bank_size=256"]
+    },
+    {
+      "name": "bank256_mu03",
+      "overrides": ["objectives.sigreg.bank_size=256", "objectives.sigreg.weight=0.3"]
+    },
+    {
+      "name": "bank256_mu1",
+      "overrides": ["objectives.sigreg.bank_size=256", "objectives.sigreg.weight=1.0"]
+    },
+    {
+      "name": "bank256_lambda025",
+      "overrides": [
+        "objectives.sigreg.bank_size=256",
+        "objectives.sigreg.weight=0.3",
+        "objectives.view.weight=0.25"
+      ]
+    },
+    {
+      "name": "bank256_drop075",
+      "overrides": [
+        "objectives.sigreg.bank_size=256",
+        "objectives.sigreg.weight=0.3",
+        "objectives.jepa_dropout=0.75"
+      ]
+    },
+    {
+      "name": "bank256_stopgrad",
+      "overrides": [
+        "objectives.sigreg.bank_size=256",
+        "objectives.sigreg.weight=0.3",
+        "objectives.view.stop_grad_target=true"
+      ]
+    },
+    {
+      "name": "view_step_unit",
+      "overrides": [
+        "objectives.sigreg.bank_size=256",
+        "objectives.sigreg.weight=0.3",
+        "objectives.view.levels=step,unit"
+      ]
+    },
+    {
+      "name": "mu1_nobank",
+      "overrides": ["objectives.sigreg.weight=1.0", "objectives.sigreg.bank_size=0"]
+    }
+  ]
+}

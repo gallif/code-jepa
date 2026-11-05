@@ -34,6 +34,35 @@ class SIGReg(nn.Module):
         return statistic.mean()
 
 
+class EmbeddingBank:
+    """FIFO of detached embeddings so SIGReg sees more than one micro-batch."""
+
+    def __init__(self, size: int):
+        self.size = size
+        self.chunks: list[torch.Tensor] = []
+
+    def _count(self) -> int:
+        return sum(chunk.size(0) for chunk in self.chunks)
+
+    def regularize(self, current: torch.Tensor, sigreg: SIGReg, training: bool) -> torch.Tensor:
+        if current.numel() == 0:
+            return current.new_zeros(())
+        pieces = [current]
+        if self.chunks:
+            pieces.append(torch.cat(self.chunks, dim=0).detach())
+        pooled = torch.cat(pieces, dim=0)
+        if pooled.size(0) < 2:
+            loss = current.new_zeros(())
+        else:
+            # Keep the gradient scale close to a current-batch-only SIGReg term.
+            loss = sigreg(pooled) * (current.size(0) / pooled.size(0))
+        if training and self.size > 0:
+            self.chunks.append(current.detach())
+            while self._count() > self.size and self.chunks:
+                self.chunks.pop(0)
+        return loss
+
+
 def pairwise_distance(pred: torch.Tensor, target: torch.Tensor, kind: str = "cosine") -> torch.Tensor:
     if pred.numel() == 0:
         return pred.new_zeros(())

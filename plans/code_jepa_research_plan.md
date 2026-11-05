@@ -6,6 +6,12 @@ Updated 2026-10-26: re-based on H-JEPA as implemented in [kevinghst/H-JEPA](http
 architecture sized to the collaborator's data (`/mnt/storage/initzan/hjepa_code/` on tzag, documented in its
 `DATA_PRINCIPLES.md`). Earlier discussion: [discussion_2026-10-25.md](discussion_2026-10-25.md).
 
+**Empirical update 2026-11-05.** On CodeContests 0.5B, training *without* stop-grad collapsed program-level
+rank by step 400 (intent effective rank 32 → 1.5) even with SIGReg μ=0.1. A 256-embedding SIGReg bank plus μ=0.3
+was not enough by itself. The setting that kept rank at every level and still moved step cosine (0.55 → 0.96 at
+step 1200) is **stop-grad on \(c_v\), SIGReg bank 256, μ=0.3, num_proj 1024**. Live configs:
+`configs/tzag_e{1,2,4}_stopgrad.yaml` (4 epochs). Do not treat `runs/e0_e4/` as the method.
+
 ## 1. Goal
 
 Test whether a pretrained code LLM, trained with a **hierarchical LLM-JEPA objective**, learns latent representations
@@ -319,9 +325,9 @@ Ablation: a randomly chosen prompt depth (intent; + approach; + units; + steps) 
 \frac{1}{|V_\ell|} \sum_{v \in V_\ell} d\big(p_v,\ c_v\big)
 \]
 
-Direction is description → code, as in LLM-JEPA (reverse as an ablation). No stop-gradient by default (as in the
-reference); stop-gradient on \(c_v\) is an ablation. \(\lambda_\ell\) is normalised per node so that large programs
-do not dominate.
+Direction is description → code, as in LLM-JEPA (reverse as an ablation). The written default was no stop-gradient
+(as in LLM-JEPA / H-JEPA); **on this data, stop-gradient on \(c_v\) is required** (see the 2026-11-05 note at the
+top). \(\lambda_\ell\) is normalised per node so that large programs do not dominate.
 
 ### 6.3 Level-to-level chain (the collaborator's framing)
 

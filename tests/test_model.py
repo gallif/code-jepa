@@ -42,6 +42,18 @@ def test_e1_skips_view_loss(cfg, tokenizer):
         cfg.objectives.view.weight, cfg.objectives.sigreg.weight = original
 
 
+def test_sigreg_bank_accepts_single_vector():
+    from code_jepa.losses import EmbeddingBank, SIGReg
+
+    sig = SIGReg(num_proj=8, knots=5)
+    bank = EmbeddingBank(size=8)
+    first = bank.regularize(torch.randn(1, 4), sig, training=True)
+    assert first.item() == 0.0
+    second = bank.regularize(torch.randn(1, 4), sig, training=True)
+    assert torch.isfinite(second)
+    assert bank._count() == 2
+
+
 def test_view_shapes(cfg, tokenizer):
     backbone = build_tiny_backbone(len(tokenizer))
     model = HierarchicalCodeJEPA(cfg, tokenizer, backbone=backbone)

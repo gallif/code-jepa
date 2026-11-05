@@ -6,7 +6,7 @@ This file is for incoming agents. Read it before changing training, data packing
 
 A **span-grounded hierarchical LLM-JEPA** on a collaborator's Python hierarchy JSONL (111.5k programs: CodeContests, TACO, KodCode). Not a reproduction of vision H-JEPA or of NCM generation.
 
-A shared Qwen2.5-Coder encoder sees **code only**. One special token per tree node (step, unit, approach, intent). A 4D tree attention mask lets each node see its span or its children. Each node's description is encoded with a level-specific predictor token. View loss is \(1-\cos(p_v,c_v)\), averaged per level. LM loss is `intent + approach → code`. SIGReg (LeJEPA / H-JEPA) regularises projected node embeddings. No EMA / stop-grad by default.
+A shared Qwen2.5-Coder encoder sees **code only**. One special token per tree node (step, unit, approach, intent). A 4D tree attention mask lets each node see its span or its children. Each node's description is encoded with a level-specific predictor token. View loss is \(1-\cos(p_v,c_v)\), averaged per level. LM loss is `intent + approach → code`. SIGReg (LeJEPA / H-JEPA) regularises projected node embeddings. **Stop-grad on code targets \(c_v\)** plus a SIGReg embedding bank are required in practice (see recipe below). No EMA.
 
 The hierarchy is **given by tree-sitter spans in the data**, not inferred. Training does not invent node counts.
 
@@ -39,19 +39,22 @@ Phase 1 (single-vector Program JEPA) is frozen at git tag `phase1-final`.
 | `src/code_jepa/data/tree.py` | Flatten JSONL → nodes |
 | `src/code_jepa/data/packer.py` | Line→token map, 4D tree mask, LM row |
 | `src/code_jepa/data/dataset.py` | JSONL dataset; packs **all kept records at init** (CPU RAM, not GPU) |
-| `src/code_jepa/losses.py` | Cosine view distance, SIGReg |
+| `src/code_jepa/losses.py` | Cosine view distance, SIGReg, `EmbeddingBank` |
 | `src/code_jepa/metrics.py` | Per-level cosine / std / effective rank, within-program level confusion |
 | `src/code_jepa/tokenize_utils.py` | Resolves `Qwen/...` names to a local hub snapshot under `cache_dir` |
 | `src/code_jepa/config.py` | YAML-backed dataclasses |
-| `scripts/train.py` | Train + val eval loop, `metrics.jsonl` |
+| `scripts/train.py` | Train + val eval loop, `metrics.jsonl`, `--override key=value` |
 | `scripts/validate_data.py` | Pack stats / drop reasons |
 | `scripts/sync_tzag.sh` | rsync **code only** to tzag storage |
 | `scripts/tzag_env.sh` | Offline HF + all caches on storage |
 | `scripts/tzag_train.sh` | Single-GPU smoke (defaults `CUDA_VISIBLE_DEVICES=3`) |
-| `scripts/tzag_run_e0_e4.sh` | Launch E0→E1 / E2 / E4 on idle L40S with ≥40 GB free |
-| `configs/default.yaml` | Local defaults (4 epochs, `jepa_dropout=0.5`, `max_row_tokens=3072`) |
+| `scripts/tzag_run_e0_e4.sh` | **Collapsed** 1-epoch E0–E4 wave; keep for comparison |
+| `scripts/tzag_run_stopgrad.sh` | Live E1 vs E2 vs E4, 4 epochs, anti-collapse recipe |
+| `scripts/tzag_sweep.sh` | Queue `configs/sweep_jobs.json` on idle L40S |
+| `configs/default.yaml` | Local defaults (still `stop_grad_target: false`; do not use for tzag) |
 | `configs/remote_tzag.yaml` | Earlier smoke config |
-| `configs/tzag_e{0,1,2,4}.yaml` | First-experiment configs (1 epoch — a cap, not the paper recipe) |
+| `configs/tzag_e{0,1,2,4}.yaml` | 1-epoch collapse wave |
+| `configs/tzag_e{1,2,4}_stopgrad.yaml` | **Live** 4-epoch configs |
 | `tests/fixtures/sample.jsonl` | Two-unit fixture |
 | `paper/` | Proposal draft + bib |
 
@@ -75,7 +78,9 @@ Val is tiny (101). That is the official split; do not silently carve a new one w
 - `view.levels` filters which levels enter view/SIGReg. `view.weight: 0` skips the view forward in training (E1) but eval still requests embeddings.
 - `jepa_dropout` (E2/E4: 0.5) skips the view term on a random fraction of **training** steps. `view=0` in logs is expected, not a bug.
 - Two graphs per step (view row up to `max_row_tokens`, then LM row) are held until backward.
-- Special tokens are mean-init. Node tokens get **no LM gradient**; that is why SIGReg is on by default for E2/E4.
+- Special tokens are mean-init. Node tokens get **no LM gradient**; that is why SIGReg is on for E2/E4.
+- Per-batch SIGReg on intent/approach is ~4 vectors (`batch_size=4`). Set `sigreg.bank_size: 256` so the regulariser sees a FIFO of detached embeddings. Scale of the bank term is `n_current / n_pooled`.
+- `view.stop_grad_target: true` freezes \(c_v\). Without it, program-level rank collapsed by step 400 even with a bank.
 - `tokenize_utils.resolve_pretrained` maps `Qwen/Qwen2.5-Coder-0.5B` to `cache_dir/hub/models--Qwen--.../snapshots/<hash>` for `local_files_only`.
 
 ## Experiments
@@ -83,19 +88,23 @@ Val is tiny (101). That is the official split; do not silently carve a new one w
 | Id | Question | Config | Implemented? |
 |---|---|---|---|
 | E0 | Zero-shot floor | `configs/tzag_e0.yaml` `--eval-only` | yes |
-| E1 | LM fine-tune only | `configs/tzag_e1.yaml` (`view.weight: 0`) | yes |
-| E2 | Flat LLM-JEPA (approach+intent, those tokens see all code) | `configs/tzag_e2.yaml` | yes |
+| E1 | LM fine-tune only | `configs/tzag_e1_stopgrad.yaml` (`view.weight: 0`) | yes |
+| E2 | Flat LLM-JEPA (approach+intent, those tokens see all code) | `configs/tzag_e2_stopgrad.yaml` | yes |
 | E3 | Chain loss, whole levels as views | — | **no** (different packing) |
-| E4 | Hierarchical LLM-JEPA (all levels, tree mask, SIGReg) | `configs/tzag_e4.yaml` | yes |
+| E4 | Hierarchical LLM-JEPA (all levels, tree mask, SIGReg) | `configs/tzag_e4_stopgrad.yaml` | yes |
 | E5 | E4 + masked-node prediction | — | no |
 | E6 | E4 + cross-solution | — | no |
 | B1 | Frozen text targets, InfoNCE, no LM | — | no |
 
 **First scientific comparison is E1 vs E2 vs E4**, plus E0 as floor. Without E1, view-loss drops are uninterpretable. Without E2, you cannot tell hierarchy from extra text. E5/E6/pooling/free-nodes/1.5B come after that triangle is real.
 
-Paper recipe is **4 epochs**, 3 seeds, equal-step and equal-FLOP vs E1. The 2026-11-04 tzag wave used **1 epoch / 1 seed / 0.5B / CodeContests only** as a go/no-go, not as the result.
+Paper recipe is **4 epochs**, 3 seeds, equal-step and equal-FLOP vs E1.
 
-Go/no-go: E2 beats E1 on approach/intent cosine; E4 beats E2 on **step/unit** cosine especially on multi-unit programs; rank of \(c_v\) does not collapse; LM stays finite.
+**Current best anti-collapse recipe** (sweep 2026-11-05, winner `bank256_stopgrad`): `view.stop_grad_target: true`, `sigreg.bank_size: 256`, `sigreg.weight: 0.3`, `sigreg.num_proj: 1024`. A bank or higher μ alone was not enough; μ=1 without a bank blocked the view loss. Configs: `configs/tzag_e{1,2,4}_stopgrad.yaml`. Launch: `scripts/tzag_run_stopgrad.sh`. Runs: `/mnt/storage/users/glifshitz/code-jepa/runs/stopgrad/`.
+
+The 2026-11-04 wave (`runs/e0_e4/`) was 1 epoch **without** stop-grad; program-level rank collapsed by step 400. Do not treat those E2/E4 checkpoints as the method.
+
+Go/no-go: E2 beats E1 on approach/intent cosine **without** rank collapse; E4 beats E2 on **step/unit** cosine especially on multi-unit programs; LM stays near E1.
 
 `eval_confusion_acc` hit 1.0 at step 0 because own-node pairs already win the argmax. Treat **per-level cosine, std, effective rank** as the live monitors until that metric is fixed (exclude the matched pair, or score level-vs-level without the diagonal).
 
@@ -111,13 +120,19 @@ bash scripts/sync_tzag.sh
 source /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_env.sh
 # smoke
 bash /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_train.sh --max-samples 64 --max-steps 20
-# E0–E4 (skips GPUs with <40 GB free)
+# E0–E4 original 1-epoch wave (collapsed; keep for comparison)
 bash /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_run_e0_e4.sh
+# E1 vs E2 vs E4, 4 epochs, stop-grad + SIGReg bank
+bash /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_run_stopgrad.sh
 ```
 
 Qwen 0.5B and 1.5B are already in `models/hf`. `HF_HUB_OFFLINE=1`. Do not download.
 
-2026-11-04 launch: E0 done; E1 GPU0, E2 GPU1, E4 GPU2; GPU3 was occupied (~30 GB, 96%). Logs and ckpts: `/mnt/storage/users/glifshitz/code-jepa/runs/e0_e4/{e0,e1,e2,e4}/` (`metrics.jsonl`, `last.pt`, `stdout` in the parent `*.stdout.log`).
+Run locations:
+
+- `/mnt/storage/users/glifshitz/code-jepa/runs/e0_e4/` — 1-epoch collapse wave (2026-11-04)
+- `/mnt/storage/users/glifshitz/code-jepa/runs/sweep/` — hyperparameter sweep (2026-11-05)
+- `/mnt/storage/users/glifshitz/code-jepa/runs/stopgrad/` — live 4-epoch E1/E2/E4 (2026-11-06; GPUs 0–2). GPU 3 is often occupied by another user.
 
 **GPU memory (0.5B, batch 4, eager, grad checkpoint, bf16):** roughly 8–16 GB typical, observed ~20–28 GB on L40S during E1/E4. 1.5B later: ~16–24 GB. GTX 1650 will OOM. Dataset packing is **CPU RAM** (dense `T×T` masks; CodeContests train is on the order of 10 GB per process).
 

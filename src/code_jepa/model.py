@@ -7,7 +7,7 @@ import torch.nn as nn
 from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase
 
 from code_jepa.config import ExperimentConfig
-from code_jepa.losses import SIGReg, pairwise_distance
+from code_jepa.losses import EmbeddingBank, SIGReg, pairwise_distance
 from code_jepa.tokenize_utils import resolve_pretrained, special_tokens
 
 LEVEL_NAMES = ("step", "unit", "approach", "intent")
@@ -89,6 +89,7 @@ class HierarchicalCodeJEPA(nn.Module):
             {level: ProjectionHead(hidden, out_dim, cfg.projection_head.layers) for level in LEVEL_NAMES}
         )
         self.sigreg = SIGReg(knots=cfg.objectives.sigreg.knots, num_proj=cfg.objectives.sigreg.num_proj)
+        self.banks = {level: EmbeddingBank(cfg.objectives.sigreg.bank_size) for level in LEVEL_NAMES}
         if cfg.backbone.grad_checkpointing:
             self.backbone.gradient_checkpointing_enable()
         self.backbone.config.use_cache = False
@@ -186,8 +187,14 @@ class HierarchicalCodeJEPA(nn.Module):
                     if not self._level_active(level):
                         continue
                     sel = valid & (level_ids == i)
-                    if sel.sum() >= 2:
-                        sig_terms.append(self.sigreg(target[sel].float()))
+                    current = target[sel].float() if sel.any() else target.new_zeros((0, target.size(-1)))
+                    if cfg.sigreg.bank_size > 0:
+                        term = self.banks[level].regularize(current, self.sigreg, self.training)
+                    elif sel.sum() >= 2:
+                        term = self.sigreg(current)
+                    else:
+                        continue
+                    sig_terms.append(term)
                 if sig_terms:
                     losses["sigreg"] = torch.stack(sig_terms).mean()
             if with_embeddings:
