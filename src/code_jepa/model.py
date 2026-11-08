@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import torch
@@ -11,6 +12,10 @@ from code_jepa.losses import EmbeddingBank, SIGReg, pairwise_distance
 from code_jepa.tokenize_utils import resolve_pretrained, special_tokens
 
 LEVEL_NAMES = ("step", "unit", "approach", "intent")
+# Which embeddings SIGReg regularises. "code" = node-token projections, "text" = predictor-token
+# projections, both un-detached regardless of view.direction. "target" is the pre-2026-11-08
+# behaviour (whatever the view target is, detached when stop_grad_target is on).
+SIGREG_SIDES = {"code": ("code",), "text": ("text",), "both": ("code", "text"), "target": ("target",)}
 
 
 class ProjectionHead(nn.Module):
@@ -89,7 +94,20 @@ class HierarchicalCodeJEPA(nn.Module):
             {level: ProjectionHead(hidden, out_dim, cfg.projection_head.layers) for level in LEVEL_NAMES}
         )
         self.sigreg = SIGReg(knots=cfg.objectives.sigreg.knots, num_proj=cfg.objectives.sigreg.num_proj)
-        self.banks = {level: EmbeddingBank(cfg.objectives.sigreg.bank_size) for level in LEVEL_NAMES}
+        sig_on = cfg.objectives.sigreg.side
+        if sig_on not in SIGREG_SIDES:
+            raise ValueError(f"objectives.sigreg.side must be one of {sorted(SIGREG_SIDES)}, got {sig_on!r}")
+        if sig_on == "target" and cfg.objectives.view.stop_grad_target and cfg.objectives.sigreg.weight > 0:
+            warnings.warn(
+                "sigreg.side=target with view.stop_grad_target=true: SIGReg sees a detached tensor "
+                "and contributes no gradient.",
+                stacklevel=2,
+            )
+        self.banks = {
+            (side, level): EmbeddingBank(cfg.objectives.sigreg.bank_size)
+            for side in SIGREG_SIDES[sig_on]
+            for level in LEVEL_NAMES
+        }
         if cfg.backbone.grad_checkpointing:
             self.backbone.gradient_checkpointing_enable()
         self.backbone.config.use_cache = False
@@ -125,22 +143,29 @@ class HierarchicalCodeJEPA(nn.Module):
                 out[sel] = self.heads[level](vectors[sel].float()).to(out.dtype)
         return out
 
-    def view_forward(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
+    def view_embeddings(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        """Projected (code, text) embeddings per node, both with gradient."""
         hidden = self._forward_hidden(
             batch["view_input_ids"],
             {"full_attention": batch["view_attention_mask"]},
             batch["view_position_ids"],
         )
-        c_h = self._gather(hidden, batch["node_pos"])
-        p_h = self._gather(hidden, batch["pred_pos"])
         valid = batch["valid_nodes"]
-        c = self._project(c_h, batch["level_ids"], valid)
-        p = self._project(p_h, batch["level_ids"], valid)
+        code = self._project(self._gather(hidden, batch["node_pos"]), batch["level_ids"], valid)
+        text = self._project(self._gather(hidden, batch["pred_pos"]), batch["level_ids"], valid)
+        return code, text
+
+    def _orient(self, code: torch.Tensor, text: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if self.cfg.objectives.view.direction == "code_to_text":
-            p, c = c, p
+            p, c = code, text
+        else:
+            p, c = text, code
         if self.cfg.objectives.view.stop_grad_target:
             c = c.detach()
         return p, c
+
+    def view_forward(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._orient(*self.view_embeddings(batch))
 
     def lm_forward(self, batch: dict) -> torch.Tensor:
         outputs = self.backbone(
@@ -163,11 +188,12 @@ class HierarchicalCodeJEPA(nn.Module):
         apply_view = True
         if self.training and cfg.jepa_dropout > 0:
             apply_view = torch.rand((), device=device) >= cfg.jepa_dropout
-        need_view = with_embeddings or (apply_view and cfg.view.weight > 0)
+        need_view = with_embeddings or (apply_view and (cfg.view.weight > 0 or cfg.sigreg.weight > 0))
 
         pred = target = None
         if need_view:
-            pred, target = self.view_forward(batch)
+            code, text = self.view_embeddings(batch)
+            pred, target = self._orient(code, text)
             valid = batch["valid_nodes"]
             level_ids = batch["level_ids"]
             view_terms = []
@@ -182,24 +208,29 @@ class HierarchicalCodeJEPA(nn.Module):
             if view_terms:
                 losses["view"] = torch.stack(view_terms).mean()
             if cfg.sigreg.weight > 0:
+                sides = {"code": code, "text": text, "target": target}
                 sig_terms = []
-                for i, level in enumerate(LEVEL_NAMES):
-                    if not self._level_active(level):
-                        continue
-                    sel = valid & (level_ids == i)
-                    current = target[sel].float() if sel.any() else target.new_zeros((0, target.size(-1)))
-                    if cfg.sigreg.bank_size > 0:
-                        term = self.banks[level].regularize(current, self.sigreg, self.training)
-                    elif sel.sum() >= 2:
-                        term = self.sigreg(current)
-                    else:
-                        continue
-                    sig_terms.append(term)
+                for side in SIGREG_SIDES[cfg.sigreg.side]:
+                    emb = sides[side]
+                    for i, level in enumerate(LEVEL_NAMES):
+                        if not self._level_active(level):
+                            continue
+                        sel = valid & (level_ids == i)
+                        current = emb[sel].float() if sel.any() else emb.new_zeros((0, emb.size(-1)))
+                        if cfg.sigreg.bank_size > 0:
+                            term = self.banks[(side, level)].regularize(current, self.sigreg, self.training)
+                        elif sel.sum() >= 2:
+                            term = self.sigreg(current)
+                        else:
+                            continue
+                        sig_terms.append(term)
                 if sig_terms:
                     losses["sigreg"] = torch.stack(sig_terms).mean()
             if with_embeddings:
                 losses["pred"] = pred
                 losses["target"] = target
+                losses["code_emb"] = code
+                losses["text_emb"] = text
 
         if cfg.lm.weight > 0:
             losses["lm"] = self.lm_forward(batch)

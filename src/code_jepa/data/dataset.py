@@ -95,6 +95,7 @@ def collate_packed(batch: list[PackedExample], pad_id: int) -> dict[str, torch.T
         "pred_pos": pred_pos,
         "level_ids": level_ids,
         "valid_nodes": valid,
+        "n_units": torch.tensor([ex.extra.get("n_units", -1) for ex in batch], dtype=torch.long),
         "lm_input_ids": lm_ids,
         "lm_labels": lm_labels,
         "lm_attention_mask": lm_attn,

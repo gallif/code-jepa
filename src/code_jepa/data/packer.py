@@ -299,5 +299,6 @@ def pack_record(
         node_levels=node_levels,
         lm_input_ids=lm_ids,
         lm_labels=lm_labels,
-        extra={"n_code": n_code, "n_view": t},
+        # Unit count from the full tree, so single/multi-unit splits survive node_levels filtering (E2).
+        extra={"n_code": n_code, "n_view": t, "n_units": sum(n.level == "unit" for n in nodes_all)},
     )

@@ -37,6 +37,8 @@ objectives:
     num_proj: 1024
     knots: 17
     bank_size: 256
+    # Legacy: SIGReg on the detached target => no gradient. Kept to reproduce runs/stopgrad.
+    side: target
   jepa_dropout: 0.5
 projection_head:
   dim: 256

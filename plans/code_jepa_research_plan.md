@@ -12,6 +12,15 @@ was not enough by itself. The setting that kept rank at every level and still mo
 step 1200) is **stop-grad on \(c_v\), SIGReg bank 256, μ=0.3, num_proj 1024**. Live configs:
 `configs/tzag_e{1,2,4}_stopgrad.yaml` (4 epochs). Do not treat `runs/e0_e4/` as the method.
 
+**Correction 2026-11-08.** In the 2026-11-05 sweep and the 2026-11-06 4-epoch runs, SIGReg was applied to the
+*detached* target, so it had no gradient. The "bank 256, μ=0.3" part of that recipe was never tested, and the
+results are discarded. They also showed that raw cosine is misleading: at step 0, approach cosine is 0.43 raw but
+0.006 after mean-centring. By the end, E4's approach/intent effective rank had fallen from 34 to 8 while raw
+cosine read 0.99. The current recipe is stop-grad on the view target with SIGReg on the **un-detached code-node
+embeddings** (`sigreg.side: code`), run text → code and code → text (`configs/tzag_e{2,4}_{sgcode,c2t}.yaml`).
+Go/no-go is now judged on mean-centred cosine and code-side effective rank, split by single- vs multi-unit
+programs.
+
 ## 1. Goal
 
 Test whether a pretrained code LLM, trained with a **hierarchical LLM-JEPA objective**, learns latent representations
@@ -327,7 +336,9 @@ Ablation: a randomly chosen prompt depth (intent; + approach; + units; + steps) 
 
 Direction is description → code, as in LLM-JEPA (reverse as an ablation). The written default was no stop-gradient
 (as in LLM-JEPA / H-JEPA); **on this data, stop-gradient on \(c_v\) is required** (see the 2026-11-05 note at the
-top). \(\lambda_\ell\) is normalised per node so that large programs do not dominate.
+top). SIGReg must then act on the un-detached code side, or it has no gradient (2026-11-08 correction). Code →
+description is run alongside it, not only as an ablation. \(\lambda_\ell\) is normalised per node so that large
+programs do not dominate.
 
 ### 6.3 Level-to-level chain (the collaborator's framing)
 

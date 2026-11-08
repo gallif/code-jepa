@@ -1,0 +1,10 @@
+{
+  "runs_subdir": "sgfix",
+  "common": [],
+  "jobs": [
+    {"name": "e4_sgcode", "config": "configs/tzag_e4_sgcode.yaml"},
+    {"name": "e4_c2t", "config": "configs/tzag_e4_c2t.yaml"},
+    {"name": "e2_sgcode", "config": "configs/tzag_e2_sgcode.yaml"},
+    {"name": "e2_c2t", "config": "configs/tzag_e2_c2t.yaml"}
+  ]
+}

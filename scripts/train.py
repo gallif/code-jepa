@@ -81,7 +81,7 @@ def evaluate(model: HierarchicalCodeJEPA, loader: DataLoader, device: torch.devi
     model.eval()
     loss_sums: dict[str, float] = {}
     loss_count = 0
-    preds, targets, valids, levels = [], [], [], []
+    preds, targets, valids, levels, codes, texts, n_units = [], [], [], [], [], [], []
     for batch in loader:
         batch = to_device(batch, device)
         losses = model.compute_losses(batch, with_embeddings=True)
@@ -94,6 +94,9 @@ def evaluate(model: HierarchicalCodeJEPA, loader: DataLoader, device: torch.devi
             targets.append(losses["target"].detach().cpu())
             valids.append(batch["valid_nodes"].detach().cpu())
             levels.append(batch["level_ids"].detach().cpu())
+            codes.append(losses["code_emb"].detach().cpu())
+            texts.append(losses["text_emb"].detach().cpu())
+            n_units.append(batch["n_units"].detach().cpu())
     row = {f"eval_{k}": v / max(loss_count, 1) for k, v in loss_sums.items()}
     if preds:
         metrics = representation_metrics(
@@ -101,6 +104,9 @@ def evaluate(model: HierarchicalCodeJEPA, loader: DataLoader, device: torch.devi
             _cat_pad(targets),
             _cat_pad(valids, pad_value=False),
             _cat_pad(levels, pad_value=-1),
+            code=_cat_pad(codes),
+            text=_cat_pad(texts),
+            n_units=torch.cat(n_units),
         )
         row.update({f"eval_{k}": v for k, v in metrics.items()})
     if device.type == "cuda":

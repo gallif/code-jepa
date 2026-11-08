@@ -100,6 +100,8 @@ class SigregConfig:
     num_proj: int = 1024
     knots: int = 17
     bank_size: int = 0
+    # code | text | both | target (legacy). See model.SIGREG_SIDES.
+    side: str = "code"
 
 
 @dataclass

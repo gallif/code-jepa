@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""Run configs/sweep_jobs.json on every idle tzag GPU with >=40GB free."""
+"""Queue a jobs spec (default configs/sweep_jobs.json) on every idle tzag GPU with >=40GB free.
+
+Spec keys: optional ``base_config``, optional ``runs_subdir`` (default "sweep"), ``common`` overrides,
+and ``jobs`` with ``name``, optional per-job ``config`` (overrides base_config) and ``overrides``.
+"""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -9,9 +14,11 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = json.loads((ROOT / "configs/sweep_jobs.json").read_text())
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--spec", default="configs/sweep_jobs.json")
+SPEC = json.loads((ROOT / _ap.parse_args().spec).read_text())
 STORAGE = Path(os.environ.get("CODE_JEPA_ROOT", "/mnt/storage/users/glifshitz/code-jepa"))
-RUNS = STORAGE / "runs" / "sweep"
+RUNS = STORAGE / "runs" / SPEC.get("runs_subdir", "sweep")
 PYTHON = Path(os.environ.get("CODE_JEPA_ENV", STORAGE / "env")) / "bin" / "python"
 TRAIN = ROOT / "scripts" / "train.py"
 FREE_MIB = 40000
@@ -29,6 +36,25 @@ def nvidia_free() -> list[tuple[int, int]]:
     return rows
 
 
+def foreign_busy(own_pids: set[int]) -> set[int]:
+    """GPU indices running a compute process we did not launch (other users, or stray jobs)."""
+    uuids = subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"], text=True
+    )
+    idx_of = {u.strip(): int(i) for i, u in (line.split(",") for line in uuids.strip().splitlines())}
+    apps = subprocess.check_output(
+        ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True
+    )
+    busy = set()
+    for line in apps.strip().splitlines():
+        if not line.strip():
+            continue
+        uuid, pid = [part.strip() for part in line.split(",")]
+        if int(pid) not in own_pids and uuid in idx_of:
+            busy.add(idx_of[uuid])
+    return busy
+
+
 def alive(proc: subprocess.Popen | None) -> bool:
     return proc is not None and proc.poll() is None
 
@@ -43,7 +69,7 @@ def launch(gpu: int, job: dict) -> subprocess.Popen:
         str(PYTHON),
         str(TRAIN),
         "--config",
-        str(ROOT / SPEC["base_config"]),
+        str(ROOT / job.get("config", SPEC.get("base_config"))),
         "--override",
         *overrides,
     ]
@@ -60,8 +86,10 @@ def main() -> None:
     slots: dict[int, subprocess.Popen | None] = {}
     print(f"[sweep] {len(queue)} jobs -> {RUNS}", flush=True)
     while queue or any(alive(p) for p in slots.values()):
+        own = {p.pid for p in slots.values() if alive(p)}
+        foreign = foreign_busy(own)
         for idx, free in nvidia_free():
-            if free < FREE_MIB:
+            if free < FREE_MIB or (idx in foreign and not alive(slots.get(idx))):
                 if idx in slots and not alive(slots[idx]):
                     print(f"[sweep] GPU {idx} job exited rc={slots[idx].returncode}", flush=True)
                     slots[idx] = None
