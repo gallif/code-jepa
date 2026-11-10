@@ -1,0 +1,42 @@
+{
+  "runs_subdir": "p3",
+  "common": [],
+  "jobs": [
+    {
+      "name": "e4_s82",
+      "config": "configs/tzag_p3_e4_s82.yaml"
+    },
+    {
+      "name": "e2_s82",
+      "config": "configs/tzag_p3_e2_s82.yaml"
+    },
+    {
+      "name": "e1_s82",
+      "config": "configs/tzag_p3_e1_s82.yaml"
+    },
+    {
+      "name": "e4_s23",
+      "config": "configs/tzag_p3_e4_s23.yaml"
+    },
+    {
+      "name": "e2_s23",
+      "config": "configs/tzag_p3_e2_s23.yaml"
+    },
+    {
+      "name": "e1_s23",
+      "config": "configs/tzag_p3_e1_s23.yaml"
+    },
+    {
+      "name": "e4_s37",
+      "config": "configs/tzag_p3_e4_s37.yaml"
+    },
+    {
+      "name": "e2_s37",
+      "config": "configs/tzag_p3_e2_s37.yaml"
+    },
+    {
+      "name": "e1_s37",
+      "config": "configs/tzag_p3_e1_s37.yaml"
+    }
+  ]
+}

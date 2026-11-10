@@ -96,7 +96,7 @@ def main() -> None:
         foreign = foreign_busy(own)
         for idx, free in nvidia_free():
             if free < FREE_MIB or (idx in foreign and not _ARGS.allow_foreign and not alive(slots.get(idx))):
-                if idx in slots and not alive(slots[idx]):
+                if slots.get(idx) is not None and not alive(slots[idx]):
                     print(f"[sweep] GPU {idx} job exited rc={slots[idx].returncode}", flush=True)
                     slots[idx] = None
                 continue

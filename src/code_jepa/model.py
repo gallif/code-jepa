@@ -257,7 +257,7 @@ class HierarchicalCodeJEPA(nn.Module):
                 losses["view"] = torch.stack(view_terms).mean()
             if cfg.sigreg.weight > 0:
                 sides = {"code": code, "text": text, "target": target}
-                sig_terms = []
+                sig_terms, sig_w = [], []
                 for side in SIGREG_SIDES[cfg.sigreg.side]:
                     emb = sides[side]
                     for i, level in enumerate(LEVEL_NAMES):
@@ -272,11 +272,15 @@ class HierarchicalCodeJEPA(nn.Module):
                         else:
                             continue
                         sig_terms.append(term)
+                        lw = cfg.sigreg.level_weights or {}
+                        sig_w.append(float(lw.get(level, cfg.sigreg.weight)))
                 if sig_terms:
-                    losses["sigreg"] = torch.stack(sig_terms).mean()
+                    stacked = torch.stack(sig_terms)
+                    losses["sigreg"] = stacked.mean()  # unweighted, for logging
+                    losses["sigreg_weighted"] = (stacked * stacked.new_tensor(sig_w)).mean()
             if grad_diag and torch.is_grad_enabled():
                 diag: dict[str, float] = {}
-                weighted = (("view", cfg.view.weight * losses["view"]), ("sigreg", cfg.sigreg.weight * losses["sigreg"]))
+                weighted = (("view", cfg.view.weight * losses["view"]), ("sigreg", losses.get("sigreg_weighted", zero)))
                 for term_name, term in weighted:
                     grads = (None, None)
                     if term.requires_grad:
@@ -301,6 +305,6 @@ class HierarchicalCodeJEPA(nn.Module):
         losses["total"] = (
             cfg.lm.weight * losses["lm"]
             + cfg.view.weight * losses["view"]
-            + cfg.sigreg.weight * losses["sigreg"]
+            + losses.get("sigreg_weighted", cfg.sigreg.weight * losses["sigreg"])
         )
         return losses

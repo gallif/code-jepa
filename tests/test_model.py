@@ -290,6 +290,35 @@ def test_infonce_and_centered_train_code_side(cfg, tokenizer):
             assert d["grad_diag"][f"gn_view_code_{level}"] > 0.0, (distance, level)
 
 
+def test_sigreg_level_weights(cfg, tokenizer):
+    import copy
+
+    def run(level_weights, weight=0.3):
+        c = copy.deepcopy(cfg)
+        c.objectives.jepa_dropout = 0.0
+        c.objectives.lm.weight = 0.0
+        c.objectives.view.weight = 0.0
+        c.objectives.sigreg.weight = weight
+        c.objectives.sigreg.side = "both"
+        c.objectives.sigreg.bank_size = 0
+        c.objectives.sigreg.level_weights = level_weights
+        torch.manual_seed(0)
+        model = HierarchicalCodeJEPA(c, tokenizer, backbone=build_tiny_backbone(len(tokenizer)))
+        model.train()
+        dataset = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)
+        batch = collate_packed([dataset[0], dataset[0]], tokenizer.pad_token_id)
+        torch.manual_seed(1)
+        return model.compute_losses(batch, grad_diag=True)
+
+    base = run(None)
+    same = run({"step": 0.3, "unit": 0.3, "approach": 0.3, "intent": 0.3})
+    assert torch.allclose(base["total"], same["total"], rtol=1e-5)
+    only_prog = run({"step": 0.0, "unit": 0.0, "approach": 1.0, "intent": 1.0})
+    d = only_prog["grad_diag"]
+    assert d["gn_sigreg_code_step"] == 0.0 and d["gn_sigreg_code_unit"] == 0.0
+    assert d["gn_sigreg_code_approach"] > 0.0 and d["gn_sigreg_code_intent"] > 0.0
+
+
 def test_multi_unit_split_survives_level_filtering(cfg, tokenizer):
     import copy
 

@@ -141,6 +141,10 @@ class SigregConfig:
     bank_size: int = 0
     # code | text | both | target (legacy). See model.SIGREG_SIDES.
     side: str = "code"
+    # Optional per-level weights, e.g. {step: 0.1, unit: 0.1, approach: 0.3, intent: 0.3}. When set,
+    # each level's SIGReg term is scaled by its own weight and ``weight`` is ignored; levels left out
+    # get ``weight``.
+    level_weights: dict[str, float] | None = None
 
 
 @dataclass
