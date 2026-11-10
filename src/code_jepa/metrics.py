@@ -24,7 +24,7 @@ def representation_metrics(
     text: torch.Tensor | None = None,
     n_units: torch.Tensor | None = None,
 ) -> dict[str, float]:
-    """Cosine, spread, rank, and within-program level confusion.
+    """Cosine, spread, rank, and within-program level separation.
 
     ``std_*``/``erank_*`` are on the view target (flips with view.direction). When ``code`` and
     ``text`` are given, ``erank_code_*``/``erank_text_*`` pin the side explicitly. ``cos_centered_*``
@@ -67,39 +67,50 @@ def representation_metrics(
                 metrics[f"std_{side}_{name}"] = float(emb.std(dim=0, unbiased=False).mean().item())
                 metrics[f"erank_{side}_{name}"] = float(effective_rank(emb).item())
 
-    hits_all = 0.0
-    n_all = 0.0
-    hits_multi = 0.0
-    n_multi = 0.0
-    hits_single = 0.0
-    n_single = 0.0
+    # Level separation (replaces confusion_acc, which counted the matched pair and read 1.0 at
+    # step 0). Query = centred code embedding of node v; candidates = centred text embedding of v
+    # and of every node of the same program at a *different* level. Hit if v's own description
+    # scores strictly highest. Centring is per level over all eval nodes, so a shared per-level
+    # offset cannot produce hits. Chance = mean of 1 / (1 + #other-level candidates).
+    q_all = (code if code is not None else target).float()
+    k_all = (text if text is not None else pred).float()
+    qc = torch.zeros_like(q_all)
+    kc = torch.zeros_like(k_all)
+    for i in range(len(LEVEL_NAMES)):
+        sel = valid & (level_ids == i)
+        if int(sel.sum().item()) > 1:
+            qc[sel] = q_all[sel] - q_all[sel].mean(dim=0, keepdim=True)
+            kc[sel] = k_all[sel] - k_all[sel].mean(dim=0, keepdim=True)
+    # Rows that centring reduced to float residue carry no signal; zero them so normalising
+    # cannot turn rounding noise into a direction.
+    for x, ref in ((qc, q_all), (kc, k_all)):
+        tiny = x.norm(dim=-1) <= 1e-4 * ref.norm(dim=-1).clamp_min(1e-12)
+        x[tiny] = 0.0
+    acc = {"all": [0.0, 0.0, 0.0], "multi": [0.0, 0.0, 0.0], "single": [0.0, 0.0, 0.0]}
     bsz = valid.size(0)
     for b in range(bsz):
         idx = valid[b]
-        if int(idx.sum().item()) < 2:
-            continue
-        c = F.normalize(target[b, idx], dim=-1)
-        p = F.normalize(pred[b, idx], dim=-1)
         lv = level_ids[b, idx]
-        assigned = (c @ p.T).argmax(dim=-1)
-        hit = (lv[assigned] == lv).float()
+        if int(lv.unique().numel()) < 2:
+            continue
+        qb = F.normalize(qc[b, idx], dim=-1)
+        kb = F.normalize(kc[b, idx], dim=-1)
+        sims = qb @ kb.T
+        own = sims.diagonal()
+        other = lv.unsqueeze(1) != lv.unsqueeze(0)
+        best_other = sims.masked_fill(~other, float("-inf")).max(dim=-1).values
+        hit = (own > best_other).float()
+        chance = 1.0 / (1.0 + other.sum(dim=-1).float())
         units_b = int(n_units[b].item()) if n_units is not None else int((lv == 1).sum().item())
-        n = float(hit.numel())
-        s = float(hit.sum().item())
-        hits_all += s
-        n_all += n
-        if units_b >= 2:
-            hits_multi += s
-            n_multi += n
-        else:
-            hits_single += s
-            n_single += n
-    if n_all:
-        metrics["confusion_acc"] = hits_all / n_all
-    if n_multi:
-        metrics["confusion_acc_multi_unit"] = hits_multi / n_multi
-    if n_single:
-        metrics["confusion_acc_single_unit"] = hits_single / n_single
+        for tag in ("all", "multi" if units_b >= 2 else "single"):
+            acc[tag][0] += float(hit.sum())
+            acc[tag][1] += float(hit.numel())
+            acc[tag][2] += float(chance.sum())
+    for tag, suffix in (("all", ""), ("multi", "_multi_unit"), ("single", "_single_unit")):
+        hits, n, ch = acc[tag]
+        if n:
+            metrics[f"level_sep_acc{suffix}"] = hits / n
+            metrics[f"level_sep_chance{suffix}"] = ch / n
     metrics["n_programs"] = float(bsz)
     if n_units is not None:
         metrics["n_programs_multi_unit"] = float((n_units >= 2).sum().item())

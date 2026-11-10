@@ -1,0 +1,18 @@
+{
+  "runs_subdir": "diag",
+  "common": [],
+  "jobs": [
+    {
+      "name": "e4_diag_d1",
+      "config": "configs/tzag_e4_diag_d1.yaml"
+    },
+    {
+      "name": "e4_diag_d2",
+      "config": "configs/tzag_e4_diag_d2.yaml"
+    },
+    {
+      "name": "e4_diag_d3",
+      "config": "configs/tzag_e4_diag_d3.yaml"
+    }
+  ]
+}

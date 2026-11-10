@@ -7,14 +7,14 @@ import torch
 import torch.nn as nn
 from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase
 
-from code_jepa.config import ExperimentConfig
-from code_jepa.losses import EmbeddingBank, SIGReg, pairwise_distance
+from code_jepa.config import ExperimentConfig, resolve_stop_grad
+from code_jepa.losses import EmbeddingBank, SIGReg, TargetBank, infonce_loss, pairwise_distance
 from code_jepa.tokenize_utils import resolve_pretrained, special_tokens
 
 LEVEL_NAMES = ("step", "unit", "approach", "intent")
 # Which embeddings SIGReg regularises. "code" = node-token projections, "text" = predictor-token
-# projections, both un-detached regardless of view.direction. "target" is the pre-2026-11-08
-# behaviour (whatever the view target is, detached when stop_grad_target is on).
+# projections, both un-detached regardless of view.direction and view.stop_grad. "target" is the
+# pre-2026-11-08 behaviour (whatever the view target is, detached if that side is stop-grad).
 SIGREG_SIDES = {"code": ("code",), "text": ("text",), "both": ("code", "text"), "target": ("target",)}
 
 
@@ -93,13 +93,23 @@ class HierarchicalCodeJEPA(nn.Module):
         self.heads = nn.ModuleDict(
             {level: ProjectionHead(hidden, out_dim, cfg.projection_head.layers) for level in LEVEL_NAMES}
         )
+        # Code side always uses self.heads; text side uses its own heads when not shared.
+        self.text_heads = (
+            None
+            if cfg.projection_head.shared
+            else nn.ModuleDict(
+                {level: ProjectionHead(hidden, out_dim, cfg.projection_head.layers) for level in LEVEL_NAMES}
+            )
+        )
+        self.stop_grad = resolve_stop_grad(cfg.objectives.view)
         self.sigreg = SIGReg(knots=cfg.objectives.sigreg.knots, num_proj=cfg.objectives.sigreg.num_proj)
         sig_on = cfg.objectives.sigreg.side
         if sig_on not in SIGREG_SIDES:
             raise ValueError(f"objectives.sigreg.side must be one of {sorted(SIGREG_SIDES)}, got {sig_on!r}")
-        if sig_on == "target" and cfg.objectives.view.stop_grad_target and cfg.objectives.sigreg.weight > 0:
+        target_is_text = cfg.objectives.view.direction == "code_to_text"
+        if sig_on == "target" and target_is_text and self.stop_grad == "text" and cfg.objectives.sigreg.weight > 0:
             warnings.warn(
-                "sigreg.side=target with view.stop_grad_target=true: SIGReg sees a detached tensor "
+                "sigreg.side=target with a detached text target: SIGReg sees a detached tensor "
                 "and contributes no gradient.",
                 stacklevel=2,
             )
@@ -108,6 +118,10 @@ class HierarchicalCodeJEPA(nn.Module):
             for side in SIGREG_SIDES[sig_on]
             for level in LEVEL_NAMES
         }
+        if cfg.objectives.view.center not in ("none", "ema"):
+            raise ValueError(f"view.center must be none | ema, got {cfg.objectives.view.center!r}")
+        self.centers: dict[tuple[str, str], torch.Tensor] = {}
+        self.target_banks = {level: TargetBank(cfg.objectives.view.infonce_bank) for level in LEVEL_NAMES}
         if cfg.backbone.grad_checkpointing:
             self.backbone.gradient_checkpointing_enable()
         self.backbone.config.use_cache = False
@@ -135,12 +149,19 @@ class HierarchicalCodeJEPA(nn.Module):
         idx = positions.clamp(min=0).unsqueeze(-1).expand(-1, -1, hidden.size(-1))
         return hidden.gather(1, idx)
 
-    def _project(self, vectors: torch.Tensor, level_ids: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+    def _project(
+        self,
+        vectors: torch.Tensor,
+        level_ids: torch.Tensor,
+        valid: torch.Tensor,
+        heads: nn.ModuleDict | None = None,
+    ) -> torch.Tensor:
+        heads = self.heads if heads is None else heads
         out = vectors.new_zeros(*vectors.shape[:2], self.cfg.projection_head.dim)
         for i, level in enumerate(LEVEL_NAMES):
             sel = valid & (level_ids == i)
             if sel.any():
-                out[sel] = self.heads[level](vectors[sel].float()).to(out.dtype)
+                out[sel] = heads[level](vectors[sel].float()).to(out.dtype)
         return out
 
     def view_embeddings(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
@@ -152,17 +173,29 @@ class HierarchicalCodeJEPA(nn.Module):
         )
         valid = batch["valid_nodes"]
         code = self._project(self._gather(hidden, batch["node_pos"]), batch["level_ids"], valid)
-        text = self._project(self._gather(hidden, batch["pred_pos"]), batch["level_ids"], valid)
+        text = self._project(
+            self._gather(hidden, batch["pred_pos"]), batch["level_ids"], valid, heads=self.text_heads
+        )
         return code, text
 
     def _orient(self, code: torch.Tensor, text: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """(prediction, target) for the view loss. Only the text side is ever detached."""
+        if self.stop_grad == "text":
+            text = text.detach()
         if self.cfg.objectives.view.direction == "code_to_text":
-            p, c = code, text
-        else:
-            p, c = text, code
-        if self.cfg.objectives.view.stop_grad_target:
-            c = c.detach()
-        return p, c
+            return code, text
+        return text, code
+
+    def _center(self, x: torch.Tensor, key: tuple[str, str]) -> torch.Tensor:
+        """Subtract a detached running mean for (side, level); update it in training."""
+        mom = self.cfg.objectives.view.center_momentum
+        batch_mean = x.detach().float().mean(dim=0)
+        mean = self.centers.get(key)
+        if mean is None:
+            mean = batch_mean
+        if self.training:
+            self.centers[key] = (mom * mean + (1 - mom) * batch_mean) if key in self.centers else batch_mean
+        return x - mean.to(x.dtype)
 
     def view_forward(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
         return self._orient(*self.view_embeddings(batch))
@@ -180,7 +213,12 @@ class HierarchicalCodeJEPA(nn.Module):
         allowed = self.cfg.objectives.view.levels
         return allowed is None or name in allowed
 
-    def compute_losses(self, batch: dict, with_embeddings: bool = False) -> dict[str, torch.Tensor]:
+    def compute_losses(
+        self, batch: dict, with_embeddings: bool = False, grad_diag: bool = False
+    ) -> dict[str, torch.Tensor]:
+        """Loss terms. ``grad_diag`` adds ``losses["grad_diag"]``: mean per-node L2 norm of the
+        gradient of each weighted term (view, sigreg) w.r.t. the projected code / text embeddings,
+        per level (``gn_{term}_{side}_{level}``). Cheap: it only backprops through the heads' outputs."""
         cfg = self.cfg.objectives
         device = batch["view_input_ids"].device
         zero = torch.zeros((), device=device)
@@ -202,7 +240,17 @@ class HierarchicalCodeJEPA(nn.Module):
                     continue
                 sel = valid & (level_ids == i)
                 if sel.any():
-                    term = pairwise_distance(pred[sel], target[sel], cfg.view.distance)
+                    p_l, c_l = pred[sel], target[sel]
+                    if cfg.view.distance == "infonce":
+                        bank = self.target_banks[level]
+                        term = infonce_loss(p_l, c_l, bank.get(), cfg.view.temperature)
+                        if self.training:
+                            bank.push(c_l)
+                    else:
+                        if cfg.view.center == "ema":
+                            p_l = self._center(p_l, ("pred", level))
+                            c_l = self._center(c_l, ("target", level))
+                        term = pairwise_distance(p_l, c_l, cfg.view.distance)
                     losses[f"view_{level}"] = term
                     view_terms.append(term)
             if view_terms:
@@ -226,6 +274,21 @@ class HierarchicalCodeJEPA(nn.Module):
                         sig_terms.append(term)
                 if sig_terms:
                     losses["sigreg"] = torch.stack(sig_terms).mean()
+            if grad_diag and torch.is_grad_enabled():
+                diag: dict[str, float] = {}
+                weighted = (("view", cfg.view.weight * losses["view"]), ("sigreg", cfg.sigreg.weight * losses["sigreg"]))
+                for term_name, term in weighted:
+                    grads = (None, None)
+                    if term.requires_grad:
+                        grads = torch.autograd.grad(term, [code, text], retain_graph=True, allow_unused=True)
+                    for side, g in zip(("code", "text"), grads):
+                        for i, level in enumerate(LEVEL_NAMES):
+                            sel = valid & (level_ids == i)
+                            if not sel.any():
+                                continue
+                            val = 0.0 if g is None else float(g[sel].float().norm(dim=-1).mean())
+                            diag[f"gn_{term_name}_{side}_{level}"] = val
+                losses["grad_diag"] = diag
             if with_embeddings:
                 losses["pred"] = pred
                 losses["target"] = target

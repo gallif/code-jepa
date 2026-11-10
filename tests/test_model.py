@@ -8,6 +8,12 @@ from code_jepa.model import HierarchicalCodeJEPA, build_tiny_backbone
 FIXTURE = Path(__file__).resolve().parent / "fixtures/sample.jsonl"
 
 
+def cfg_default():
+    from code_jepa.config import ExperimentConfig
+
+    return ExperimentConfig()
+
+
 def test_tiny_forward_finite(cfg, tokenizer):
     cfg.objectives.jepa_dropout = 0.0
     cfg.objectives.sigreg.weight = 0.1
@@ -76,7 +82,8 @@ def _special_row_grads(cfg, tokenizer, **objectives):
     obj.jepa_dropout = 0.0
     obj.lm.weight = 0.0
     obj.view.weight = objectives.get("view_weight", 0.0)
-    obj.view.stop_grad_target = objectives.get("stop_grad", True)
+    obj.view.stop_grad = objectives.get("stop_grad", "none")
+    obj.view.stop_grad_target = False
     obj.view.direction = objectives.get("direction", "text_to_code")
     obj.sigreg.weight = objectives.get("sigreg_weight", 0.0)
     obj.sigreg.side = objectives.get("sigreg_on", "code")
@@ -96,8 +103,10 @@ def _special_row_grads(cfg, tokenizer, **objectives):
     return float(grad[node_ids].abs().sum()), float(grad[pred_ids].abs().sum())
 
 
-def test_sigreg_on_target_is_inert_under_stop_grad(cfg, tokenizer):
-    node_g, pred_g = _special_row_grads(cfg, tokenizer, sigreg_weight=1.0, sigreg_on="target")
+def test_sigreg_on_target_is_inert_when_target_is_detached_text(cfg, tokenizer):
+    node_g, pred_g = _special_row_grads(
+        cfg, tokenizer, sigreg_weight=1.0, sigreg_on="target", stop_grad="text", direction="code_to_text"
+    )
     assert node_g == 0.0 and pred_g == 0.0
 
 
@@ -110,13 +119,175 @@ def test_sigreg_on_code_reaches_node_tokens_both_directions(cfg, tokenizer):
         assert pred_g == 0.0, direction
 
 
-def test_code_to_text_stop_grad_trains_code_side_only(cfg, tokenizer):
-    node_g, pred_g = _special_row_grads(cfg, tokenizer, view_weight=1.0, direction="code_to_text")
-    assert node_g > 0.0
-    assert pred_g == 0.0
-    node_g, pred_g = _special_row_grads(cfg, tokenizer, view_weight=1.0, direction="text_to_code")
-    assert node_g == 0.0
-    assert pred_g > 0.0
+def test_view_loss_always_trains_code_side(cfg, tokenizer):
+    """The trainee (code-node embeddings) must get view-loss gradient in every allowed config."""
+    for stop_grad in ("none", "text"):
+        for direction in ("text_to_code", "code_to_text"):
+            node_g, pred_g = _special_row_grads(
+                cfg, tokenizer, view_weight=1.0, stop_grad=stop_grad, direction=direction
+            )
+            assert node_g > 0.0, (stop_grad, direction)
+            if stop_grad == "none":
+                assert pred_g > 0.0, (stop_grad, direction)
+            else:
+                assert pred_g == 0.0, (stop_grad, direction)
+
+
+def test_stop_grad_on_code_is_rejected(cfg, tokenizer):
+    import copy
+
+    import pytest
+
+    from code_jepa.config import resolve_stop_grad
+
+    view = copy.deepcopy(cfg.objectives.view)
+    view.stop_grad, view.stop_grad_target, view.direction = "code", False, "text_to_code"
+    with pytest.raises(ValueError):
+        resolve_stop_grad(view)
+    view.stop_grad, view.stop_grad_target = "none", True  # legacy sgcode / stopgrad configs
+    with pytest.raises(ValueError):
+        resolve_stop_grad(view)
+    view.direction = "code_to_text"  # legacy c2t maps to detaching text
+    assert resolve_stop_grad(view) == "text"
+    bad = copy.deepcopy(cfg)
+    bad.objectives.view.stop_grad, bad.objectives.view.stop_grad_target = "none", True
+    bad.objectives.view.direction = "text_to_code"
+    with pytest.raises(ValueError):
+        HierarchicalCodeJEPA(bad, tokenizer, backbone=build_tiny_backbone(len(tokenizer)))
+
+
+def test_bank_does_not_dilute_sigreg_gradient():
+    from code_jepa.losses import EmbeddingBank, SIGReg
+
+    torch.manual_seed(0)
+    sig = SIGReg(num_proj=256, knots=17)
+    collapsed = lambda n: torch.randn(n, 32) * 0.05 + 3.0  # off-centre, low-variance: far from N(0, I)
+    bank = EmbeddingBank(size=256)
+    for _ in range(64):
+        bank.regularize(collapsed(4), sig, training=True)
+    cur = collapsed(4).requires_grad_(True)
+    torch.autograd.grad(sig(cur), cur)  # warm-up, same RNG use pattern
+    torch.manual_seed(1)
+    g_batch = torch.autograd.grad(sig(cur), cur)[0].norm(dim=-1).mean()
+    torch.manual_seed(1)
+    g_bank = torch.autograd.grad(bank.regularize(cur, sig, training=False), cur)[0].norm(dim=-1).mean()
+    ratio = float(g_bank / g_batch)
+    assert 0.3 < ratio < 3.0, ratio
+
+
+def test_separate_text_heads(cfg, tokenizer):
+    import copy
+
+    c = copy.deepcopy(cfg)
+    c.projection_head.shared = False
+    c.objectives.jepa_dropout = 0.0
+    model = HierarchicalCodeJEPA(c, tokenizer, backbone=build_tiny_backbone(len(tokenizer)))
+    assert model.text_heads is not None
+    dataset = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)
+    batch = collate_packed([dataset[0], dataset[0]], tokenizer.pad_token_id)
+    losses = model.compute_losses(batch)
+    losses["total"].backward()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.heads.parameters())
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.text_heads.parameters())
+
+
+def test_grad_diag_reports_contract(cfg, tokenizer):
+    import copy
+
+    for stop_grad in ("none", "text"):
+        c = copy.deepcopy(cfg)
+        c.objectives.jepa_dropout = 0.0
+        c.objectives.view.weight = 1.0
+        c.objectives.view.stop_grad = stop_grad
+        c.objectives.sigreg.weight = 0.3
+        c.objectives.sigreg.side = "both"
+        c.objectives.sigreg.bank_size = 16
+        model = HierarchicalCodeJEPA(c, tokenizer, backbone=build_tiny_backbone(len(tokenizer)))
+        model.train()
+        dataset = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)
+        batch = collate_packed([dataset[0], dataset[0]], tokenizer.pad_token_id)
+        d = model.compute_losses(batch, grad_diag=True)["grad_diag"]
+        for level in ("step", "unit", "approach", "intent"):
+            assert d[f"gn_view_code_{level}"] > 0.0, (stop_grad, level)
+            assert d[f"gn_sigreg_code_{level}"] > 0.0, (stop_grad, level)
+            assert d[f"gn_sigreg_text_{level}"] > 0.0, (stop_grad, level)
+            if stop_grad == "text":
+                assert d[f"gn_view_text_{level}"] == 0.0, level
+            else:
+                assert d[f"gn_view_text_{level}"] > 0.0, level
+
+
+def test_level_sep_ignores_shared_level_offset():
+    from code_jepa.metrics import representation_metrics
+
+    torch.manual_seed(0)
+    n_prog = 300
+    levels = torch.tensor([0, 0, 0, 1, 1, 2, 3]).repeat(n_prog, 1)
+    valid = torch.ones_like(levels, dtype=torch.bool)
+    offset = torch.randn(4, 16) * 10
+    # Level-only signal: identical rows collapse to ~0 after centring -> no hits.
+    lvl = offset[levels]
+    m = representation_metrics(lvl, lvl, valid, levels, code=lvl, text=lvl)
+    assert m["level_sep_acc"] == 0.0
+    # Level offset + independent code/text noise: no node information -> about chance.
+    code = lvl + torch.randn(n_prog, 7, 16)
+    text = lvl + torch.randn(n_prog, 7, 16)
+    m = representation_metrics(text, code, valid, levels, code=code, text=text)
+    assert abs(m["level_sep_acc"] - m["level_sep_chance"]) < 0.06, (m["level_sep_acc"], m["level_sep_chance"])
+    # Shared node signal on both sides -> near-perfect.
+    node = torch.randn(n_prog, 7, 16) * 3
+    m = representation_metrics(lvl + node, lvl + node + 0.1 * torch.randn_like(node), valid, levels,
+                               code=lvl + node, text=lvl + node + 0.1 * torch.randn_like(node))
+    assert m["level_sep_acc"] > 0.95
+
+
+def test_centered_view_loss_ignores_shared_offset():
+    import copy
+
+    c = copy.deepcopy(cfg_default())
+    c.objectives.view.center = "ema"
+    c.objectives.view.center_momentum = 0.0  # mean = current batch mean
+    model = HierarchicalCodeJEPA.__new__(HierarchicalCodeJEPA)
+    torch.nn.Module.__init__(model)
+    model.cfg, model.centers = c, {}
+    model.train()
+    torch.manual_seed(0)
+    p, t = torch.randn(6, 8), torch.randn(6, 8)
+    offset = torch.randn(8) * 50
+    from code_jepa.losses import pairwise_distance
+
+    base = pairwise_distance(model._center(p, ("pred", "x")), model._center(t, ("target", "x")))
+    model.centers = {}
+    shifted = pairwise_distance(model._center(p + offset, ("pred", "x")), model._center(t + offset, ("target", "x")))
+    assert torch.allclose(base, shifted, atol=1e-5)
+    assert pairwise_distance(p + offset, t + offset) < 0.05  # raw cosine is fooled by the offset
+
+
+def test_infonce_and_centered_train_code_side(cfg, tokenizer):
+    import copy
+
+    for distance, center in (("infonce", "none"), ("cosine", "ema")):
+        c = copy.deepcopy(cfg)
+        c.objectives.jepa_dropout = 0.0
+        c.objectives.lm.weight = 0.0
+        c.objectives.sigreg.weight = 0.0
+        c.objectives.view.weight = 1.0
+        c.objectives.view.distance = distance
+        c.objectives.view.center = center
+        c.objectives.view.infonce_bank = 8
+        model = HierarchicalCodeJEPA(c, tokenizer, backbone=build_tiny_backbone(len(tokenizer)))
+        model.train()
+        dataset = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)
+        batch = collate_packed([dataset[0], dataset[0]], tokenizer.pad_token_id)
+        model.compute_losses(batch)  # fills the bank / centres
+        if center == "ema":  # the batch repeats one program, so seed means that do not zero the rows
+            for side in ("pred", "target"):
+                for level in ("step", "unit", "approach", "intent"):
+                    model.centers[(side, level)] = torch.randn(c.projection_head.dim) * 0.1
+        d = model.compute_losses(batch, grad_diag=True)
+        assert torch.isfinite(d["total"]), distance
+        for level in ("step", "unit", "approach", "intent"):
+            assert d["grad_diag"][f"gn_view_code_{level}"] > 0.0, (distance, level)
 
 
 def test_multi_unit_split_survives_level_filtering(cfg, tokenizer):

@@ -54,13 +54,48 @@ class EmbeddingBank:
         if pooled.size(0) < 2:
             loss = current.new_zeros(())
         else:
-            # Keep the gradient scale close to a current-batch-only SIGReg term.
-            loss = sigreg(pooled) * (current.size(0) / pooled.size(0))
+            # SIGReg's statistic is N * err, so its gradient on each current sample is O(1) whatever
+            # N is. Do not rescale by n_current / n_pooled: until 2026-11-10 that factor shrank the
+            # gradient on current samples ~65x for intent/approach (4 of 260).
+            loss = sigreg(pooled)
         if training and self.size > 0:
             self.chunks.append(current.detach())
             while self._count() > self.size and self.chunks:
                 self.chunks.pop(0)
         return loss
+
+
+class TargetBank:
+    """FIFO of detached, L2-normalised view targets, used as extra InfoNCE negatives."""
+
+    def __init__(self, size: int):
+        self.size = size
+        self.chunks: list[torch.Tensor] = []
+
+    def get(self) -> torch.Tensor | None:
+        return torch.cat(self.chunks, dim=0) if self.chunks else None
+
+    def push(self, target: torch.Tensor) -> None:
+        if self.size <= 0 or target.numel() == 0:
+            return
+        self.chunks.append(F.normalize(target.detach().float(), dim=-1))
+        while sum(c.size(0) for c in self.chunks) > self.size and self.chunks:
+            self.chunks.pop(0)
+
+
+def infonce_loss(
+    pred: torch.Tensor, target: torch.Tensor, bank: torch.Tensor | None, temperature: float
+) -> torch.Tensor:
+    """Row i of pred should pick target i among all targets in the batch (same level) and the bank."""
+    if pred.size(0) == 0:
+        return pred.new_zeros(())
+    p = F.normalize(pred.float(), dim=-1)
+    keys = F.normalize(target.float(), dim=-1)
+    if bank is not None and bank.numel():
+        keys = torch.cat([keys, bank.to(keys.device)], dim=0)
+    logits = p @ keys.T / temperature
+    labels = torch.arange(p.size(0), device=p.device)
+    return F.cross_entropy(logits, labels)
 
 
 def pairwise_distance(pred: torch.Tensor, target: torch.Tensor, kind: str = "cosine") -> torch.Tensor:

@@ -1,3 +1,4 @@
+# RETIRED 2026-11-10: detaches the code side (the trainee); now raises in resolve_stop_grad.
 # E4 hierarchical LLM-JEPA with the sweep winner: stop-grad targets, SIGReg bank 256, μ=0.3.
 backbone:
   name: Qwen/Qwen2.5-Coder-0.5B

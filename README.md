@@ -12,9 +12,11 @@ A pretrained Qwen2.5-Coder backbone encodes **code only** with one special token
 tree node (step, unit, approach, intent). A tree attention mask lets each node see
 only its span or its children. Each node's description is encoded separately; a
 level-specific predictor token produces one vector \(p_v\) that is pulled toward
-the matching code vector \(c_v\), with stop-gradient on the view target. The next-token
-loss on `intent + approach → code` anchors the backbone. SIGReg with a 256-embedding
-bank regularises the un-detached code-node embeddings per level (`sigreg.side: code`).
+the matching code vector \(c_v\). The code-node embeddings are the trainee and always get
+view-loss gradient; stop-gradient is an experimental option on the **text** side only
+(`view.stop_grad: none | text`). The next-token loss on `intent + approach → code` anchors
+the backbone. SIGReg with a 256-embedding bank regularises the code (and text) projections
+per level.
 
 ## Setup
 
@@ -37,16 +39,20 @@ python scripts/validate_data.py --data /path/to/hierarchy.jsonl --max-samples 20
 
 ```bash
 python scripts/train.py --config configs/default.yaml --data tests/fixtures/sample.jsonl --max-steps 2 --cpu --tiny
-python scripts/train.py --config configs/tzag_e4_sgcode.yaml
+python scripts/train.py --config configs/tzag_e4_diag_a1.yaml
 ```
 
 Default backbone is `Qwen/Qwen2.5-Coder-0.5B` (cached under `models/hf`).
 
-Live comparison is **E1 vs E2 vs E4** at 4 epochs, with stop-grad and SIGReg on code
-embeddings, in both view directions (`configs/tzag_e{2,4}_{sgcode,c2t}.yaml`, with E1
-from `configs/tzag_e1_stopgrad.yaml`). Without stop-grad, program-level rank collapsed
-by step 400. The 2026-11-05/06 stop-grad runs had SIGReg on the detached target (no
-gradient) and are discarded; see `AGENTS.md`.
+**Status (2026-11-10).** All earlier JEPA runs are discarded:
+- the stop-grad sat on the code side (no view gradient into the node tokens), or
+- SIGReg had no gradient, or
+- SIGReg's bank cut its gradient ~65×.
+
+A 2000-step diagnostic sweep (`configs/diag_jobs.json`) is deciding whether a text-side
+stop-grad is needed at all, using a pass rule fixed in advance (`scripts/diag_summary.py`).
+The 4-epoch E1 vs E2 vs E4 comparison runs after that. See
+[plans/gradient_flow_fix_2026-11-10.md](plans/gradient_flow_fix_2026-11-10.md) and `AGENTS.md`.
 
 ## tzag (132.66.150.42)
 
@@ -61,8 +67,9 @@ ssh 132.66.150.42
 source /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_env.sh
 # smoke
 bash /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_train.sh --max-samples 64 --max-steps 20
-# 4-epoch E2 / E4 x {sgcode, c2t}, queued on idle L40S (>=40GB free, no other users)
-bash /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_sweep.sh --spec configs/sgfix_jobs.json
+# Phase 2 diagnostics, restricted to GPUs 0,1 (>=40GB free, no other users)
+bash /mnt/storage/users/glifshitz/code-jepa/repo/scripts/tzag_sweep.sh --spec configs/diag_jobs.json --gpus 0,1
+python3 /mnt/storage/users/glifshitz/code-jepa/repo/scripts/diag_summary.py
 ```
 
 Layout on the server:
@@ -71,7 +78,8 @@ Layout on the server:
 - `/mnt/storage/users/glifshitz/code-jepa/env` — existing Python 3.11 + PyTorch
 - `/mnt/storage/users/glifshitz/code-jepa/models/hf` — Qwen 0.5B / 1.5B (already there)
 - `/mnt/storage/initzan/hjepa_code/hierarchy/full/*.jsonl` — data (not copied)
-- `/mnt/storage/users/glifshitz/code-jepa/runs/sgfix/` — live 4-epoch E2/E4 runs
+- `/mnt/storage/users/glifshitz/code-jepa/runs/diag/` — live Phase 2 diagnostics (2026-11-10)
+- `/mnt/storage/users/glifshitz/code-jepa/runs/sgfix/` — 2026-11-08 E2/E4 runs (discarded)
 - `/mnt/storage/users/glifshitz/code-jepa/runs/stopgrad/` — E1 baseline (E2/E4 there are discarded)
 - `/mnt/storage/users/glifshitz/code-jepa/runs/e0_e4/` — collapsed 1-epoch wave
 - `/mnt/storage/users/glifshitz/code-jepa/runs/sweep/` — hyperparameter sweep

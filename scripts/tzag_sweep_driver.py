@@ -16,12 +16,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 _ap = argparse.ArgumentParser()
 _ap.add_argument("--spec", default="configs/sweep_jobs.json")
-SPEC = json.loads((ROOT / _ap.parse_args().spec).read_text())
+_ap.add_argument("--gpus", default=None, help="comma-separated GPU indices this driver may use, e.g. 0,1")
+_ap.add_argument("--min-free-mib", type=int, default=40000, help="free memory needed to start a job")
+_ap.add_argument("--allow-foreign", action="store_true", help="start jobs on GPUs that other processes also use")
+_ARGS = _ap.parse_args()
+SPEC = json.loads((ROOT / _ARGS.spec).read_text())
+ALLOWED = None if _ARGS.gpus is None else {int(g) for g in _ARGS.gpus.split(",") if g.strip()}
 STORAGE = Path(os.environ.get("CODE_JEPA_ROOT", "/mnt/storage/users/glifshitz/code-jepa"))
 RUNS = STORAGE / "runs" / SPEC.get("runs_subdir", "sweep")
 PYTHON = Path(os.environ.get("CODE_JEPA_ENV", STORAGE / "env")) / "bin" / "python"
 TRAIN = ROOT / "scripts" / "train.py"
-FREE_MIB = 40000
+FREE_MIB = _ARGS.min_free_mib
 
 
 def nvidia_free() -> list[tuple[int, int]]:
@@ -32,7 +37,8 @@ def nvidia_free() -> list[tuple[int, int]]:
     rows = []
     for line in out.strip().splitlines():
         idx, free = [part.strip() for part in line.split(",")]
-        rows.append((int(idx), int(free)))
+        if ALLOWED is None or int(idx) in ALLOWED:
+            rows.append((int(idx), int(free)))
     return rows
 
 
@@ -89,7 +95,7 @@ def main() -> None:
         own = {p.pid for p in slots.values() if alive(p)}
         foreign = foreign_busy(own)
         for idx, free in nvidia_free():
-            if free < FREE_MIB or (idx in foreign and not alive(slots.get(idx))):
+            if free < FREE_MIB or (idx in foreign and not _ARGS.allow_foreign and not alive(slots.get(idx))):
                 if idx in slots and not alive(slots[idx]):
                     print(f"[sweep] GPU {idx} job exited rc={slots[idx].returncode}", flush=True)
                     slots[idx] = None

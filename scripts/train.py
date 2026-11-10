@@ -31,6 +31,8 @@ def set_seed(seed: int) -> None:
 
 def param_groups(model: HierarchicalCodeJEPA, cfg: ExperimentConfig):
     new_ids = {id(p) for p in model.heads.parameters()} | {id(p) for p in model.sigreg.parameters()}
+    if model.text_heads is not None:
+        new_ids |= {id(p) for p in model.text_heads.parameters()}
     emb = model.backbone.get_input_embeddings().weight
     new_ids.add(id(emb))
     backbone, new_params = [], []
@@ -201,7 +203,7 @@ def main() -> None:
     )
     loader = make_loader(dataset, cfg, tokenizer, shuffle=True)
     opt = torch.optim.AdamW(param_groups(model, cfg), weight_decay=0.01)
-    print(f"train n={len(dataset)} dropped={dataset.dropped} batch={cfg.train.batch_size}")
+    print(f"train n={len(dataset)} dropped={dataset.dropped} batch={cfg.train.batch_size} stop_grad={model.stop_grad}")
 
     model.train()
     step = 0
@@ -211,7 +213,8 @@ def main() -> None:
         pbar = tqdm(loader, desc=f"epoch {epoch}")
         for batch in pbar:
             batch = to_device(batch, device)
-            losses = model.compute_losses(batch)
+            log_now = (step + 1) % cfg.train.log_every == 0
+            losses = model.compute_losses(batch, grad_diag=log_now)
             loss = losses["total"] / cfg.train.grad_accum
             loss.backward()
             if (step + 1) % cfg.train.grad_accum == 0:
@@ -229,6 +232,7 @@ def main() -> None:
                 for key in LOG_KEYS:
                     if key in losses:
                         row[key] = float(losses[key].detach())
+                row.update(losses.get("grad_diag", {}))
                 if device.type == "cuda":
                     row["mem_gb"] = torch.cuda.max_memory_allocated() / (1024**3)
                 append_jsonl(metrics_path, row)
@@ -236,7 +240,7 @@ def main() -> None:
             if eval_loader is not None and cfg.train.eval_every and step % cfg.train.eval_every == 0:
                 row = {"split": "eval", "step": step, "epoch": epoch, **evaluate(model, eval_loader, device)}
                 append_jsonl(metrics_path, row)
-                print(f"eval@{step}", {k: round(v, 4) for k, v in row.items() if k in ("eval_lm", "eval_view", "eval_cos_intent", "eval_cos_step", "eval_confusion_acc")})
+                print(f"eval@{step}", {k: round(v, 4) for k, v in row.items() if k in ("eval_lm", "eval_view", "eval_cos_centered_intent", "eval_cos_centered_step", "eval_erank_code_intent", "eval_erank_code_step", "eval_level_sep_acc")})
             if step % cfg.train.save_every == 0:
                 torch.save({"model": model.state_dict(), "step": step}, output_dir / f"step_{step}.pt")
             if cfg.train.max_steps and step >= cfg.train.max_steps:

@@ -21,6 +21,20 @@ embeddings** (`sigreg.side: code`), run text → code and code → text (`config
 Go/no-go is now judged on mean-centred cosine and code-side effective rank, split by single- vs multi-unit
 programs.
 
+**Correction 2026-11-10.** Two more problems invalidate every JEPA run so far:
+1. With `direction: text_to_code`, `stop_grad_target` detached the **code** side, the representation under
+   study. The `stopgrad` and `sgcode` runs therefore trained the node tokens only through SIGReg.
+2. The SIGReg bank multiplied its term by `n_current / n_pooled`, cutting the gradient on current samples about
+   65× for intent/approach (effective μ ≈ 0.005). That is why `c2t` collapsed (code erank ≈ 1–2), even though
+   SIGReg measured the collapse.
+
+The 2026-11-05 conclusion that stop-grad is required is therefore unsupported: no-stop-grad with a working
+SIGReg had never been tested. The rules now:
+- The code side is always trained by the view loss (enforced in code).
+- Stop-grad is an experimental variable, `view.stop_grad: none | text`.
+- A 2000-step E4 diagnostic decides between `none` and `text` with a pass rule fixed in advance.
+  See [gradient_flow_fix_2026-11-10.md](gradient_flow_fix_2026-11-10.md).
+
 ## 1. Goal
 
 Test whether a pretrained code LLM, trained with a **hierarchical LLM-JEPA objective**, learns latent representations
@@ -334,10 +348,10 @@ Ablation: a randomly chosen prompt depth (intent; + approach; + units; + steps) 
 \frac{1}{|V_\ell|} \sum_{v \in V_\ell} d\big(p_v,\ c_v\big)
 \]
 
-Direction is description → code, as in LLM-JEPA (reverse as an ablation). The written default was no stop-gradient
-(as in LLM-JEPA / H-JEPA); **on this data, stop-gradient on \(c_v\) is required** (see the 2026-11-05 note at the
-top). SIGReg must then act on the un-detached code side, or it has no gradient (2026-11-08 correction). Code →
-description is run alongside it, not only as an ablation. \(\lambda_\ell\) is normalised per node so that large
+Direction is description → code, as in LLM-JEPA (reverse as an ablation). The default is no stop-gradient
+(as in LLM-JEPA / H-JEPA). \(c_v\) is never detached: it is the representation being trained. A stop-gradient on
+the description side \(p_v\) is an ablation, kept only if the 2026-11-10 diagnostic shows it is needed (see the
+correction at the top). \(\lambda_\ell\) is normalised per node so that large
 programs do not dominate.
 
 ### 6.3 Level-to-level chain (the collaborator's framing)
@@ -481,11 +495,11 @@ hierarchy:
 predictor: {tokens_per_level: 1, level_specific: true}
 objectives:
   lm: {weight: 1.0, prompt: [intent, approach]}
-  view: {weight: 0.5, distance: cosine, stop_grad_target: false, direction: text_to_code}
+  view: {weight: 0.5, distance: cosine, stop_grad: none, direction: text_to_code}   # stop_grad: none | text; never code
   chain: false
   masked_nodes: {enabled: false, levels: [step, unit], target: no_detach}   # or stop_grad | ema
   cross_solution: false
-  sigreg: {weight: 0.1, num_proj: 1024, knots: 17}   # per level, on projected node embeddings
+  sigreg: {weight: 0.3, num_proj: 1024, knots: 17, bank_size: 256, side: both}   # per level; bank term not rescaled
   jepa_dropout: 0.5
 projection_head: {dim: 256, layers: 2}                # per level; none = raw hidden states
 train: {lr_backbone: 1.0e-5, lr_new_params: 5.0e-5, epochs: 4, seeds: [82, 23, 37]}

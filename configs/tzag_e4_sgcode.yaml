@@ -1,3 +1,4 @@
+# RETIRED 2026-11-10: detaches the code side (the trainee); now raises in resolve_stop_grad.
 # E4 stop-grad fix (sgcode): text predicts frozen code; SIGReg (with grad) on code node embeddings. Bank 256, mu=0.3, otherwise = tzag_e4_stopgrad.
 backbone:
   name: Qwen/Qwen2.5-Coder-0.5B

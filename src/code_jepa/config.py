@@ -22,6 +22,33 @@ SPECIAL_PRED_TOKENS = {
 }
 
 
+STOP_GRAD_SIDES = ("none", "text")
+
+
+def resolve_stop_grad(view: "ViewObjective") -> str:
+    """Return the side detached in the view loss: "none" or "text".
+
+    The code-side node embeddings are what the method trains, so a setting that detaches them is an
+    error, not a warning. That includes the legacy ``stop_grad_target: true`` with
+    ``direction: text_to_code`` (the 2026-11-05..08 stopgrad / sgcode configs).
+    """
+    side = view.stop_grad
+    if view.stop_grad_target:
+        legacy = "text" if view.direction == "code_to_text" else "code"
+        if side not in ("none", legacy):
+            raise ValueError(
+                f"view.stop_grad={side!r} conflicts with legacy stop_grad_target=true ({legacy!r})"
+            )
+        side = legacy
+    if side not in STOP_GRAD_SIDES:
+        raise ValueError(
+            f"view stop-grad on {side!r} is not allowed: the code side is the trainee and must get "
+            "view-loss gradient. Use view.stop_grad: none | text. (stop_grad_target=true with "
+            "direction=text_to_code detaches code and is retired.)"
+        )
+    return side
+
+
 def _merge(dst: dict, src: dict) -> dict:
     out = dict(dst)
     for key, value in src.items():
@@ -82,9 +109,21 @@ class LmObjective:
 class ViewObjective:
     weight: float = 0.5
     distance: str = "cosine"
+    # Which side is detached in the view loss: "none" (default, as in LLM-JEPA / H-JEPA) or "text".
+    # The code side is the trainee and is never detached; see resolve_stop_grad.
+    stop_grad: str = "none"
+    # Legacy (before 2026-11-10): detach whatever the view target is. Mapped by resolve_stop_grad;
+    # with direction=text_to_code it would detach code and is rejected.
     stop_grad_target: bool = False
     direction: str = "text_to_code"
     levels: list[str] | None = None
+    # "none" | "ema": subtract a running per-level, per-side mean (detached) from p and c before the
+    # distance, so the loss cannot be lowered by aligning a shared offset direction.
+    center: str = "none"
+    center_momentum: float = 0.99
+    # distance: "infonce" uses in-batch same-level negatives plus a FIFO bank of detached targets.
+    temperature: float = 0.07
+    infonce_bank: int = 256
 
 
 @dataclass
@@ -119,6 +158,8 @@ class ObjectivesConfig:
 class ProjectionConfig:
     dim: int = 256
     layers: int = 2
+    # False = separate per-level heads for the code and text sides (ablation knob).
+    shared: bool = True
 
 
 @dataclass

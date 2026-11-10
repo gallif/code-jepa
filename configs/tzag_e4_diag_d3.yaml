@@ -1,0 +1,65 @@
+# Phase 2c diagnostic D3 (2026-11-10): A1 with bank_size 32 (batch 4 x accum 2, 2000 steps): separates bank size from batch size.
+# Otherwise = tzag_e4_diag_a1.yaml. See plans/gradient_flow_fix_2026-11-10.md.
+backbone:
+  name: Qwen/Qwen2.5-Coder-0.5B
+  cache_dir: /mnt/storage/users/glifshitz/code-jepa/models/hf
+  local_files_only: true
+  lora: false
+  dtype: bf16
+  grad_checkpointing: true
+  attn_implementation: eager
+hierarchy:
+  node_levels: [step, unit, approach, intent]
+  node_encoding: tree_mask
+  step_depth: 2
+  max_nodes: 96
+  max_row_tokens: 2048
+predictor:
+  tokens_per_level: 1
+  level_specific: true
+objectives:
+  lm:
+    weight: 1.0
+    prompt: [intent, approach]
+  view:
+    weight: 0.5
+    distance: cosine
+    stop_grad: none
+    direction: text_to_code
+    levels: [step, unit, approach, intent]
+  chain: false
+  masked_nodes:
+    enabled: false
+    levels: [step, unit]
+    target: no_detach
+  cross_solution: false
+  sigreg:
+    weight: 0.3
+    num_proj: 1024
+    knots: 17
+    bank_size: 32
+    side: both
+  jepa_dropout: 0.5
+projection_head:
+  dim: 256
+  layers: 2
+train:
+  lr_backbone: 1.0e-5
+  lr_new_params: 5.0e-5
+  epochs: 4
+  max_steps: 2000
+  batch_size: 4
+  grad_accum: 2
+  seed: 82
+  output_dir: /mnt/storage/users/glifshitz/code-jepa/runs/diag/e4_diag_d3
+  log_every: 20
+  eval_every: 200
+  save_every: 4000
+  num_workers: 0
+  max_grad_norm: 1.0
+data:
+  jsonl: /mnt/storage/initzan/hjepa_code/hierarchy/full/code_contests.jsonl
+  split: train
+  eval_split: val
+  max_samples: null
+  eval_max_samples: null
