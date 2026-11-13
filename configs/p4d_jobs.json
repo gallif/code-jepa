@@ -1,0 +1,14 @@
+{
+  "runs_subdir": "p4",
+  "common": [],
+  "jobs": [
+    {
+      "name": "e4free_shuffle_s82",
+      "config": "configs/tzag_p4_e4free_shuffle_s82.yaml"
+    },
+    {
+      "name": "e4free_progground_s82",
+      "config": "configs/tzag_p4_e4free_progground_s82.yaml"
+    }
+  ]
+}

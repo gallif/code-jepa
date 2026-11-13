@@ -153,12 +153,25 @@ def pack_record(
     record: dict,
     tokenizer: PreTrainedTokenizerBase,
     cfg: ExperimentConfig,
+    text_override: dict[str, str] | None = None,
 ) -> PackedExample:
+    """``text_override`` (node_id -> text) replaces description texts in the view row only; the LM prompt
+    keeps the record's true intent/approach (used by the shuffled-description control)."""
     code = record.get("L4_code") or record.get("code") or ""
     nodes_all = flatten_record(record, step_depth=cfg.hierarchy.step_depth)
     warnings = validate_tree(code, nodes_all)
     allowed_levels = set(cfg.hierarchy.node_levels)
     nodes = [n for n in nodes_all if n.level in allowed_levels] if allowed_levels else nodes_all
+    prompt_nodes = nodes
+    if text_override:
+        from dataclasses import replace as _replace
+
+        nodes = [_replace(n, text=text_override.get(n.node_id, n.text)) for n in nodes]
+    ground_program = cfg.hierarchy.ground == "program"
+    if cfg.hierarchy.program_tokens not in ("tree", "all_code", "units_and_code"):
+        raise ValueError(f"hierarchy.program_tokens must be tree | all_code | units_and_code, got {cfg.hierarchy.program_tokens!r}")
+    if cfg.hierarchy.ground not in ("span", "program"):
+        raise ValueError(f"hierarchy.ground must be span | program, got {cfg.hierarchy.ground!r}")
     record_id = str(record.get("id") or record.get("problem_id") or "")
 
     if len(nodes) > cfg.hierarchy.max_nodes:
@@ -214,12 +227,22 @@ def pack_record(
     node_levels: list[str] = []
 
     for node in nodes:
+        node_levels.append(node.level)
+        if ground_program and node.level in ("step", "unit"):
+            node_seq_pos.append(-1)  # filled with the program token's position below
+            continue
         pos = len(view_ids)
         view_ids.append(_node_token_id(tokenizer, node.level))
         span_last_line = min(node.span[1], max(last_pos_of_line, default=1))
         position_ids.append(last_pos_of_line.get(span_last_line, n_code - 1))
         node_seq_pos.append(pos)
-        node_levels.append(node.level)
+    if ground_program:
+        prog = [p for n, p in zip(nodes, node_seq_pos) if n.level == "approach"] or [
+            p for n, p in zip(nodes, node_seq_pos) if n.level == "intent"
+        ]
+        if not prog:
+            raise ValueError("hierarchy.ground=program needs an approach or intent node")
+        node_seq_pos = [prog[0] if p == -1 else p for p in node_seq_pos]
 
     id_to_seq = {n.node_id: node_seq_pos[i] for i, n in enumerate(nodes)}
 
@@ -265,9 +288,13 @@ def pack_record(
         mask[i, : i + 1] = 0.0
 
     for node, seq_i in zip(nodes, node_seq_pos):
+        if ground_program and node.level in ("step", "unit"):
+            continue  # no token of its own
         mask[seq_i, seq_i] = 0.0
         child_ids = [nid for nid in _allowed_node_ids(node) if nid in id_to_seq]
-        if node.level in ("approach", "intent") and not child_ids:
+        if node.level in ("approach", "intent") and (
+            not child_ids or cfg.hierarchy.program_tokens == "all_code" or ground_program
+        ):
             mask[seq_i, :n_code] = 0.0
         else:
             allowed_lines = _allowed_code_lines(node, nodes_by_id)
@@ -276,12 +303,14 @@ def pack_record(
                     mask[seq_i, tok_i] = 0.0
             for nid in child_ids:
                 mask[seq_i, id_to_seq[nid]] = 0.0
+        if node.level in ("approach", "intent") and cfg.hierarchy.program_tokens == "units_and_code":
+            mask[seq_i, :n_code] = 0.0  # hybrid: unit tokens (above) and every code token
 
     for start, end in desc_spans:
         for i in range(start, end):
             mask[i, start : i + 1] = 0.0
 
-    prompt = _lm_prompt(record, nodes, cfg.objectives.lm.prompt)
+    prompt = _lm_prompt(record, prompt_nodes, cfg.objectives.lm.prompt)
     prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"] if prompt else []
     lm_ids = prompt_ids + code_ids
     lm_labels = [-100] * len(prompt_ids) + list(code_ids)

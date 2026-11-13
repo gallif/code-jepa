@@ -1,0 +1,14 @@
+{
+  "runs_subdir": "p4",
+  "common": [],
+  "jobs": [
+    {
+      "name": "e4_allcode_s23",
+      "config": "configs/tzag_p4_e4_allcode_s23.yaml"
+    },
+    {
+      "name": "e4_allcode_s37",
+      "config": "configs/tzag_p4_e4_allcode_s37.yaml"
+    }
+  ]
+}

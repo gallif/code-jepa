@@ -20,12 +20,16 @@ class HierarchicalJsonlDataset(Dataset):
         split: str | None = None,
         max_samples: int | None = None,
         skip_dropped: bool = True,
+        shuffle_descriptions: bool | None = None,
     ):
         self.tokenizer = tokenizer
         self.cfg = cfg
         self.examples: list[PackedExample] = []
         self.dropped = 0
         path = Path(jsonl)
+        if shuffle_descriptions is None:
+            shuffle_descriptions = bool(cfg.data.shuffle_descriptions) and split == cfg.data.split
+        records = []
         with path.open() as handle:
             for line in handle:
                 line = line.strip()
@@ -34,14 +38,18 @@ class HierarchicalJsonlDataset(Dataset):
                 record = json.loads(line)
                 if split and record.get("split") not in (None, split):
                     continue
-                packed = pack_record(record, tokenizer, cfg)
-                if packed.dropped:
-                    self.dropped += 1
-                    if skip_dropped:
-                        continue
-                self.examples.append(packed)
-                if max_samples is not None and len(self.examples) >= max_samples:
-                    break
+                records.append(record)
+        overrides = _shuffled_texts(records, cfg) if shuffle_descriptions else [None] * len(records)
+        self.shuffled = bool(shuffle_descriptions)
+        for record, override in zip(records, overrides):
+            packed = pack_record(record, tokenizer, cfg, text_override=override)
+            if packed.dropped:
+                self.dropped += 1
+                if skip_dropped:
+                    continue
+            self.examples.append(packed)
+            if max_samples is not None and len(self.examples) >= max_samples:
+                break
         if not self.examples:
             raise ValueError(f"no usable records in {path} (dropped={self.dropped})")
 
@@ -50,6 +58,28 @@ class HierarchicalJsonlDataset(Dataset):
 
     def __getitem__(self, idx: int) -> PackedExample:
         return self.examples[idx]
+
+
+def _shuffled_texts(records: list[dict], cfg: ExperimentConfig) -> list[dict[str, str]]:
+    """Permute description texts among same-level nodes across ``records`` (fixed seed)."""
+    import random
+
+    from code_jepa.data.tree import flatten_record
+
+    per_record = [flatten_record(r, step_depth=cfg.hierarchy.step_depth) for r in records]
+    slots: dict[str, list[tuple[int, str]]] = {}
+    for i, nodes in enumerate(per_record):
+        for n in nodes:
+            slots.setdefault(n.level, []).append((i, n.node_id))
+    out: list[dict[str, str]] = [{} for _ in records]
+    rng = random.Random(cfg.data.shuffle_seed)
+    texts = {(i, n.node_id): n.text for i, nodes in enumerate(per_record) for n in nodes}
+    for level, keys in slots.items():
+        pool = [texts[k] for k in keys]
+        rng.shuffle(pool)
+        for (i, nid), text in zip(keys, pool):
+            out[i][nid] = text
+    return out
 
 
 def collate_packed(batch: list[PackedExample], pad_id: int) -> dict[str, torch.Tensor | list]:

@@ -91,6 +91,13 @@ class HierarchyConfig:
     step_depth: int = 2
     max_nodes: int = 96
     max_row_tokens: int = 3072
+    # "tree": approach/intent tokens read the top-level unit tokens (E4). "all_code": they read every
+    # code token, as in E2, while steps/units keep the tree mask (free-program-token control).
+    # "units_and_code": both (hybrid: keeps the unit -> program link without the bottleneck).
+    program_tokens: str = "tree"
+    # "span": every node token reads its own span (default). "program": step/unit descriptions keep their
+    # segments but target the program's approach token (same amount of text, no span grounding control).
+    ground: str = "span"
 
 
 @dataclass
@@ -190,6 +197,10 @@ class DataConfig:
     eval_split: str | None = "val"
     max_samples: int | None = None
     eval_max_samples: int | None = None
+    # Control: permute description texts among same-level nodes of the TRAINING split (fixed seed).
+    # Evaluation and the LM prompt always use the true texts.
+    shuffle_descriptions: bool = False
+    shuffle_seed: int = 0
 
 
 @dataclass

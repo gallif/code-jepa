@@ -306,6 +306,143 @@ Configs: `configs/tzag_p3_{e1,e2,e4}_s{82,23,37}.yaml` and `configs/p3_jobs.json
   - LM ≈ E1.
 - E1 has untrained heads, so compare against probes or frozen-head retrieval on E1's hidden states.
 
+### Phase 3 results (all 9 runs finished 2026-11-11; mean over seeds 82 / 23 / 37, with the range across seeds)
+
+| Exp | eval set | LM | Centred cos (s / u / a / i) | Code erank (u / a / i), step 0 ≈ 73 / 34 / 32 | level_sep (multi) |
+|---|---|---|---|---|---|
+| E1 (LM only) | 98 | 0.805 (0.804–0.808) | +0.04 / −0.00 / −0.02 / −0.00 (untrained heads) | 79 / 34 / 33 | 0.35 (0.30) |
+| E2 (approach + intent) | **101** | 0.766 (0.763–0.768) | — / — / **+0.84** / **+0.69** | — / 34 / 30 | 1.00 (2 levels only; not comparable) |
+| E4 (all levels) | 98 | 0.799 (0.798–0.801) | **+0.73 / +0.79** / +0.46 / +0.29 | **18** / 28 / 38 | **0.95 (0.96)** |
+
+E4 multi-unit centred cos at unit level: +0.84 (0.82–0.86). The three seeds agree closely.
+
+First read against the go/no-go:
+1. **E2 > E1 on approach/intent without rank loss: yes.** E2 is +0.84 / +0.69 against E1 ≈ 0, with approach/intent rank about at step 0.
+   - Caveat: E1's heads are untrained, so E1 is only a floor. A probe or frozen-head comparison on E1's hidden states is still needed (Phase 4).
+2. **E4 > E2 on step/unit (multi-unit): not testable with the current eval.** E2 has no step/unit nodes, and E2's step/unit heads would be untrained.
+   - E4 reaches +0.73 / +0.79 (+0.84 multi-unit) at step/unit, with level_sep 0.95.
+   - The proper test needs probes, or frozen-head retrieval of step/unit spans from E2 and E1 hidden states (Phase 4).
+3. **LM ≈ E1: yes for E4.** On the same 98-program set, E4's LM is 0.799 against E1's 0.805, slightly *better* on all three seeds.
+   - E2's 0.766 is on a different eval set (101 programs, the 3 long ones included). It isn't comparable until rescored on the same 98.
+
+Other findings:
+- **E2 beats E4 at the program levels by a wide margin**: approach +0.84 vs +0.46, intent +0.69 vs +0.29.
+  - In E4, the approach/intent tokens read only the unit tokens (tree mask). In E2 they read all the code.
+  - So the hierarchy bottleneck costs program-level alignment. That is a central result for the paper, and it needs a control: E4 with free program tokens that see all code.
+- **E4 unit rank fell to about 18** (25% of step 0) over 4 epochs, with μ 0.1 at unit. Approach is at about 28 (82%) and intent at about 38 (above step 0).
+  - Unit alignment is still the highest of all levels. But the rank loss is a caveat, and unit μ between 0.1 and 0.3 is worth a look.
+
+## Phase 4a — frozen-backbone probe results (2026-11-11, `scripts/probe_eval.py`, `runs/p4/probes_*.json`)
+
+Method:
+- Last-layer hidden states at node tokens (code) and description predictor tokens (text), with no projection heads.
+- One ridge map text → code per level, fitted on 4000 train programs, with λ chosen on a held-out 20%.
+- Val scoring: centred cosine, plus R@1/R@5 retrieval among all val nodes of that level.
+- Mean of 3 seeds, with the range in brackets. Every model is scored the same way, so untrained heads don't matter.
+
+**Step / unit (E4 tree packing, val 98)**
+
+| Model | step cos | step R@1 (multi) | unit cos | unit R@1 (multi) |
+|---|---|---|---|---|
+| E0 | 0.41 | 0.09 (0.10) | 0.41 | 0.07 (0.07) |
+| E1 | 0.40 | 0.06 (0.08) | 0.36 | 0.06 (0.10) |
+| E2 | 0.38 | 0.11 (0.12) | 0.34 | 0.08 (0.09) |
+| **E4** | **0.62** [0.60–0.63] | **0.18 (0.23)** | **0.62** [0.61–0.62] | **0.15 (0.19)** |
+
+**Approach / intent (E2's native packing, val 101)**
+
+| Model | approach cos | approach R@1 / R@5 | intent cos | intent R@1 / R@5 |
+|---|---|---|---|---|
+| E0 | 0.27 | 0.05 / 0.23 | 0.22 | 0.03 / 0.16 |
+| E1 | 0.24 | 0.04 / 0.24 | 0.19 | 0.04 / 0.20 |
+| **E2** | **0.78** [0.77–0.80] | **0.47 / 0.97** | **0.62** [0.61–0.63] | **0.23 / 0.77** |
+| E4 | 0.37 | 0.13 / 0.49 | 0.32 | 0.04 / 0.28 |
+
+**LM on the same 98 programs:** E1 0.805, E2 0.797, E4 0.799 (E0 0.994).
+
+Go/no-go:
+1. **E2 > E1 on approach/intent: PASS, decisively.** Approach R@1 is 0.47 against 0.04 and R@5 0.97 against 0.24. Intent cos is 0.62 against 0.19. The seed ranges don't overlap.
+2. **E4 > E2 and E1 on step/unit, multi-unit: PASS.**
+   - Step: multi R@1 0.23 against 0.12 / 0.08; cos 0.62 against 0.38 / 0.40.
+   - Unit: multi R@1 0.19 against 0.09 / 0.10; cos 0.62 against 0.34 / 0.36.
+   - The seed ranges don't overlap.
+3. **LM ≈ E1: PASS.** E2 and E4 are both slightly *better* than E1 on the same 98 programs.
+
+Also:
+- E1 and E2 add nothing to step/unit over the pretrained E0. Only the hierarchical loss does.
+- At the program levels, E2 far exceeds E4, even under E2's packing (approach R@1 0.47 against 0.13).
+- The free-program-token control (`runs/p4/e4_allcode_s82`) tests whether that gap is the tree bottleneck. It is running now; `e4_unit02_s82` follows.
+
+## Phase 4b/c — free program tokens (3 seeds) and the hybrid (2026-11-12)
+
+**Free program tokens** (`hierarchy.program_tokens: all_code`; approach/intent read all code, steps/units keep the tree mask), seeds 82 / 23 / 37.
+
+Own heads, mean over seeds:
+
+| Model | LM | cc (s / u / a / i) | code erank (u / a / i) | level_sep |
+|---|---|---|---|---|
+| E4 (tree) | 0.799 | +0.73 / +0.79 / +0.46 / +0.29 | 18 / 28 / 38 | 0.95 |
+| **E4 free** | 0.804 | **+0.79 / +0.87 / +0.85 / +0.73** | 22 / 32 / 28 | **0.99** |
+| E2 (101 programs) | — | — / — / +0.84 / +0.69 | — / 34 / 30 | — |
+
+Probes (`runs/p4/probes_allcode.json`; all models packed with program tokens reading all code; val 98; R@1, multi-unit in brackets):
+
+| Model | step cos / R@1 | unit cos / R@1 | approach cos / R@1 / R@5 | intent cos / R@1 / R@5 |
+|---|---|---|---|---|
+| E1 | 0.40 / 0.06 (0.08) | 0.36 / 0.06 (0.10) | 0.23 / 0.05 / 0.23 | 0.20 / 0.05 / 0.18 |
+| E2 | 0.38 / 0.11 (0.12) | 0.34 / 0.08 (0.09) | 0.79 / 0.44 / 0.97 | 0.62 / 0.23 / 0.77 |
+| E4 | 0.62 / 0.18 (0.23) | 0.62 / 0.15 (0.19) | 0.38 / 0.14 / 0.50 | 0.31 / 0.07 / 0.34 |
+| **E4 free** | **0.71 / 0.30 (0.32)** | **0.74 / 0.26 (0.36)** | **0.79 / 0.48 / 0.99** | **0.62 / 0.24 / 0.78** |
+
+- E4 free matches E2 at approach/intent and **beats E4 at step/unit** as well. Seed ranges don't overlap with E4's.
+- LM is 0.804, the same as E1's 0.805 and slightly above E4's 0.799 / E2's 0.797.
+
+**Hybrid** (`program_tokens: units_and_code`, seed 82):
+- Own heads: +0.78 / +0.87 / +0.85 / +0.72, LM 0.802, level_sep 0.99. That is the same as E4 free.
+- Probe readouts of its approach/intent (cos / R@1):
+
+| Readout | approach | intent |
+|---|---|---|
+| units + code (as trained) | 0.785 / 0.46 | 0.62 / 0.21 |
+| code only (unit tokens blanked) | 0.786 / 0.48 | 0.62 / 0.21 |
+| units only (raw code blanked) | 0.25 / 0.05 | 0.17 / 0.03 |
+
+- Blanking the unit tokens changes nothing. Blanking the code drops the program level to the pretrained floor.
+- **The unit → program link is decorative.** Given both, the program tokens use only raw code. The hybrid adds nothing over free tokens.
+
+Conclusion (user decision 2026-11-12): **tree E4 stays the default; E4 free (`program_tokens: all_code`) is kept as an alternative approach.** The two remaining controls run on E4 free first (`configs/p4d_jobs.json`).
+- Step/unit keep span-grounded tree tokens.
+- Program tokens read all code.
+- The paper's claim becomes *span-grounded multi-level supervision*, not strict compositional encoding (each level built only from the level below).
+- The shuffled-description and program-level-grounding controls should use this variant (pending the user's decision).
+
+## Phase 4d — supervision controls on free-token E4 (seed 82; finished 2026-11-13 03:25)
+
+Both use free-token E4's losses and recipe. Probes are under the all_code packing (`runs/p4/probes_controls.json`); R@1, multi-unit in brackets.
+
+| Model | LM | step cos / R@1 | unit cos / R@1 | approach cos / R@1 / R@5 | intent cos / R@1 / R@5 |
+|---|---|---|---|---|---|
+| E4 free | 0.803 | 0.72 / 0.29 (0.34) | 0.75 / 0.26 (0.37) | 0.78 / 0.49 / 0.99 | 0.62 / 0.25 / 0.77 |
+| **shuffled descriptions** | 0.802 | 0.24 / 0.06 (0.08) | 0.20 / 0.08 (0.11) | 0.18 / 0.10 / 0.37 | 0.13 / 0.06 / 0.27 |
+| **program-level grounding** | 0.800 | 0.41 / 0.12 (0.14) | 0.42 / 0.09 (0.09) | 0.69 / 0.38 / 0.94 | 0.58 / 0.25 / 0.72 |
+| *ref: E2 (3 seeds)* | 0.797 | 0.38 / 0.11 (0.12) | 0.34 / 0.08 (0.09) | 0.79 / 0.44 / 0.97 | 0.62 / 0.23 / 0.77 |
+| *ref: E1 (3 seeds)* | 0.805 | 0.40 / 0.06 (0.08) | 0.36 / 0.06 (0.10) | 0.23 / 0.05 / 0.23 | 0.20 / 0.05 / 0.18 |
+
+Own heads:
+- Shuffled: cc ≈ 0 at all levels (+0.04 / +0.01 / +0.08 / +0.04), level_sep 0.35 (initial value 0.34), code rank high (113 / 69 / 69).
+- Program grounding: approach / intent +0.81 / +0.69. Its step/unit own-head numbers aren't meaningful, because it has no step/unit tokens.
+
+Reading:
+1. **The gains come from correct pairing, not from extra text.**
+   - With descriptions mis-paired, every level falls to or below the E1/E0 floor.
+   - Step/unit probe cosines even drop below the pretrained model (0.24 / 0.20 against E0's 0.41 / 0.41).
+   - LM is unchanged (0.802), so the LM anchor doesn't depend on the descriptions.
+2. **Span grounding is what creates the step/unit representations.**
+   - With exactly the same descriptions, but step/unit texts aimed at the program token, step/unit probes fall back to E2's level: R@1 0.12 / 0.09 against E2's 0.11 / 0.08, and against E4 free's 0.29 / 0.26.
+   - The program level stays strong (approach R@1 0.38, intent 0.25), slightly below E4 free.
+   - The extra step/unit text alone doesn't add step/unit structure; tying it to the spans does.
+- Caveats: one seed. Run on the free-token variant; the default tree variant has not had these two controls yet.
+
 ## Phase 4 — evaluation
 
 - Per-level retrieval R@1/5/10, within a program and across val.

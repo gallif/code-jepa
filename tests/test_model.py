@@ -319,6 +319,75 @@ def test_sigreg_level_weights(cfg, tokenizer):
     assert d["gn_sigreg_code_approach"] > 0.0 and d["gn_sigreg_code_intent"] > 0.0
 
 
+def test_program_tokens_all_code_mask(cfg, tokenizer):
+    import copy
+
+    seen = {}
+    for mode in ("tree", "all_code"):
+        c = copy.deepcopy(cfg)
+        c.hierarchy.program_tokens = mode
+        ex = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)[0]
+        n_code = min(ex.node_seq_pos)
+        seen[mode] = {
+            (lv, i): int((ex.view_mask[pos, :n_code] == 0).sum())
+            for i, (lv, pos) in enumerate(zip(ex.node_levels, ex.node_seq_pos))
+        }
+    for (lv, i), n in seen["all_code"].items():
+        if lv in ("approach", "intent"):
+            assert seen["tree"][(lv, i)] < n  # tree: header lines only; all_code: every code token
+        else:
+            assert seen["tree"][(lv, i)] == n  # steps/units unchanged
+
+
+def test_shuffle_descriptions_permutes_within_level_only(cfg, tokenizer):
+    import copy
+
+    c = copy.deepcopy(cfg)
+    c.data.shuffle_seed = 3
+    true = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)[0]
+    shuf = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None, shuffle_descriptions=True)[0]
+    by_level = lambda ex: {lv: sorted(n.text for n in ex.nodes if n.level == lv) for lv in ("step", "unit")}
+    assert by_level(true) == by_level(shuf)  # same texts per level
+    assert [n.text for n in true.nodes] != [n.text for n in shuf.nodes]  # but re-paired
+    assert true.lm_input_ids == shuf.lm_input_ids  # LM prompt keeps the true texts
+    c.data.shuffle_descriptions = True  # the config flag only applies to the training split
+    c.data.split = None
+    assert HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None).shuffled
+    c.data.split = "train"
+    assert not HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None).shuffled
+
+
+def test_ground_program_targets_approach_token(cfg, tokenizer):
+    import copy
+
+    c = copy.deepcopy(cfg)
+    span = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)[0]
+    c.hierarchy.ground = "program"
+    prog = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)[0]
+    assert prog.node_levels == span.node_levels  # same descriptions
+    assert len(prog.pred_seq_pos) == len(span.pred_seq_pos)
+    appr = [p for lv, p in zip(prog.node_levels, prog.node_seq_pos) if lv == "approach"][0]
+    for lv, p in zip(prog.node_levels, prog.node_seq_pos):
+        if lv in ("step", "unit"):
+            assert p == appr
+    n_code = min(prog.node_seq_pos)
+    assert int((prog.view_mask[appr, :n_code] == 0).sum()) == n_code  # program token reads all code
+
+
+def test_program_tokens_hybrid_is_union(cfg, tokenizer):
+    import copy
+
+    rows = {}
+    for mode in ("tree", "all_code", "units_and_code"):
+        c = copy.deepcopy(cfg)
+        c.hierarchy.program_tokens = mode
+        ex = HierarchicalJsonlDataset(FIXTURE, tokenizer, c, split=None)[0]
+        rows[mode] = {lv: ex.view_mask[p] == 0 for lv, p in zip(ex.node_levels, ex.node_seq_pos) if lv in ("approach", "intent")}
+    for lv in ("approach", "intent"):
+        assert torch.equal(rows["units_and_code"][lv], rows["tree"][lv] | rows["all_code"][lv])
+        assert rows["units_and_code"][lv].sum() > rows["all_code"][lv].sum()  # also sees the unit tokens
+
+
 def test_multi_unit_split_survives_level_filtering(cfg, tokenizer):
     import copy
 
