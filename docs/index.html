@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code-JEPA Benchmarks</title>
+<meta name="description" content="Plain-language walkthrough of the Code-JEPA 0.5B benchmark report (2026-11-15).">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fbfaf7; --surface:#ffffff; --surface-2:#f3f1ec; --ink:#1c1b19; --ink-2:#55524c; --ink-3:#8a867e;
+  --line:#e4e0d8; --accent:#2f5bd3;
+  --c-free:#2f5bd3; --c-tree:#8ea8ec; --c-e1:#b3aea4; --c-e0:#6f6a61; --c-ext:#d9822b; --c-ext2:#a35a12; --c-chance:#d6d2ca;
+  --yes:#1e7a46; --yes-bg:#e5f3ea; --no:#b42318; --no-bg:#fbe9e7; --mid:#8a6100; --mid-bg:#fbf1d9;
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141413; --surface:#1d1c1a; --surface-2:#262522; --ink:#ece9e2; --ink-2:#b4b0a7; --ink-3:#85817a;
+    --line:#34322e; --accent:#7f9ff5;
+    --c-free:#7f9ff5; --c-tree:#3f5aa3; --c-e1:#6b675f; --c-e0:#a39e94; --c-ext:#e8a052; --c-ext2:#b8742c; --c-chance:#3a3834;
+    --yes:#6fcf97; --yes-bg:#16301f; --no:#f08a7e; --no-bg:#3a1a16; --mid:#e8c062; --mid-bg:#33290f;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141413; --surface:#1d1c1a; --surface-2:#262522; --ink:#ece9e2; --ink-2:#b4b0a7; --ink-3:#85817a;
+  --line:#34322e; --accent:#7f9ff5;
+  --c-free:#7f9ff5; --c-tree:#3f5aa3; --c-e1:#6b675f; --c-e0:#a39e94; --c-ext:#e8a052; --c-ext2:#b8742c; --c-chance:#3a3834;
+  --yes:#6fcf97; --yes-bg:#16301f; --no:#f08a7e; --no-bg:#3a1a16; --mid:#e8c062; --mid-bg:#33290f;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,system-ui,-apple-system,sans-serif}
+.wrap{max-width:880px;margin:0 auto;padding:0 16px}
+header.hero{padding:64px 0 32px;border-bottom:1px solid var(--line)}
+.eyebrow{font:500 12px/1 "JetBrains Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+h1{font-size:clamp(30px,5vw,44px);line-height:1.1;margin:14px 0 16px;letter-spacing:-.02em;font-weight:700}
+.lede{font-size:19px;color:var(--ink-2);max-width:680px;margin:0}
+h2{font-size:26px;letter-spacing:-.01em;margin:0 0 6px;line-height:1.25}
+h3{font-size:17px;margin:28px 0 8px}
+section{padding:48px 0;border-bottom:1px solid var(--line)}
+.num{font:500 13px "JetBrains Mono",monospace;color:var(--accent);margin-bottom:6px;display:block}
+p{margin:0 0 14px}
+.muted{color:var(--ink-2)}
+.small{font-size:14px}
+code{font:13.5px "JetBrains Mono",monospace;background:var(--surface-2);padding:1px 5px;border-radius:4px}
+nav.toc{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:24px;font-size:14px}
+nav.toc a{color:var(--ink-2);text-decoration:none;border-bottom:1px solid var(--line)}
+nav.toc a:hover{color:var(--accent);border-color:var(--accent)}
+
+/* verdicts */
+.verdicts{display:grid;gap:10px;margin-top:20px}
+.verdict{display:grid;grid-template-columns:1fr auto;gap:6px 16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+.verdict .claim{font-weight:600}
+.verdict .detail{grid-column:1/-1;color:var(--ink-2);font-size:14.5px}
+.pills{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:flex-start}
+.pill{font:600 12px/1 Inter,sans-serif;padding:5px 9px;border-radius:999px;white-space:nowrap}
+.pill.yes{background:var(--yes-bg);color:var(--yes)}
+.pill.no{background:var(--no-bg);color:var(--no)}
+.pill.mid{background:var(--mid-bg);color:var(--mid)}
+
+/* model cards */
+.models{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:18px 0}
+.model{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+.model .name{display:flex;align-items:center;gap:8px;font-weight:700}
+.sw{width:12px;height:12px;border-radius:3px;display:inline-block;flex:none}
+.model p{font-size:14px;color:var(--ink-2);margin:6px 0 0}
+
+/* diagram */
+.diagram{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:18px 0}
+.diagram svg{width:100%;height:auto;display:block}
+.diagram text{font-family:Inter,sans-serif}
+
+/* charts */
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px 16px 12px;margin:18px 0}
+.chart-title{font-weight:600;font-size:15px;margin-bottom:2px}
+.chart-sub{font-size:13px;color:var(--ink-3);margin-bottom:14px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--ink-2);margin-bottom:12px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.group{margin-bottom:14px}
+.group-label{font-size:13.5px;color:var(--ink);margin-bottom:5px;font-weight:500}
+.bar-row{display:grid;grid-template-columns:96px 1fr 46px;align-items:center;gap:8px;height:18px;margin:2px 0}
+.bar-row .who{font-size:12px;color:var(--ink-3);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.track{position:relative;height:12px;background:transparent}
+.bar{height:100%;border-radius:0 3px 3px 0;min-width:2px}
+.bar-row .val{font:500 12px "JetBrains Mono",monospace;color:var(--ink-2)}
+.bar-row.best .val{color:var(--ink);font-weight:700}
+.chance-mark{position:absolute;top:-3px;bottom:-3px;width:0;border-left:2px dashed var(--ink-3)}
+
+/* tables */
+details{margin:10px 0 0}
+summary{cursor:pointer;font-size:14px;color:var(--ink-2)}
+.tbl{overflow-x:auto;margin-top:10px;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;background:var(--surface)}
+th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left;white-space:normal;min-width:180px}
+th{background:var(--surface-2);font-weight:600}
+tr:last-child td{border-bottom:none}
+td b{color:var(--ink)}
+
+.callout{border-left:3px solid var(--accent);background:var(--surface);padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0;font-size:15px}
+.callout.warn{border-color:var(--mid)}
+.callout.bad{border-color:var(--no)}
+.callout b{display:block;margin-bottom:2px}
+ul.tight{padding-left:20px;margin:0 0 14px}
+ul.tight li{margin:4px 0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:640px){.two{grid-template-columns:1fr}.bar-row{grid-template-columns:72px 1fr 40px}}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+.stat .k{font-size:13px;color:var(--ink-3)}
+.stat .v{font-size:26px;font-weight:700;letter-spacing:-.01em}
+.stat .v small{font-size:14px;color:var(--ink-3);font-weight:500}
+footer{padding:32px 0 56px;color:var(--ink-3);font-size:13px}
+.theme-toggle{position:fixed;top:12px;right:12px;background:var(--surface);border:1px solid var(--line);color:var(--ink-2);border-radius:999px;padding:6px 10px;font:12px Inter,sans-serif;cursor:pointer}
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="themeBtn" aria-label="Toggle dark mode">◐ Theme</button>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">Code-JEPA 0.5B · Benchmark report · 15 Nov 2026</div>
+    <h1>What did JEPA training buy us, and what did it cost?</h1>
+    <p class="lede">We fine-tuned Qwen2.5-Coder-0.5B so that every block, function and whole program gets a vector that matches its plain-English description. This page walks through where those vectors beat the model we started from, where they don't, and how much the language model degraded along the way.</p>
+    <nav class="toc">
+      <a href="#tldr">TL;DR</a><a href="#setup">Setup</a><a href="#s1">1 · Algorithm matching</a><a href="#s2">2 · Localisation</a><a href="#s3">3 · Robustness</a><a href="#s4">4 · vs. embedders</a><a href="#s5">5 · LM drift</a><a href="#s6">6 · Code generation</a><a href="#caveats">Caveats</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section id="tldr"><div class="wrap">
+  <span class="num">TL;DR</span>
+  <h2>Five claims, checked</h2>
+  <p class="muted">The model is good at the jobs it was trained for. It doesn't yet generalise to messy real-world code, and it still keys on names rather than meaning.</p>
+  <div class="verdicts">
+    <div class="verdict"><div class="claim">Matches solutions by <em>what they compute</em>, not how they're written</div>
+      <div class="pills"><span class="pill yes">✓ Same problem</span><span class="pill mid">= Tags</span></div>
+      <div class="detail">Finds the other solution to the same TACO problem 54% of the time vs 28% for the base model. Algorithm-tag probes tie.</div></div>
+    <div class="verdict"><div class="claim">Points to the block or function a description refers to</div>
+      <div class="pills"><span class="pill yes">✓ In a program</span><span class="pill no">✗ Real repos</span></div>
+      <div class="detail">.86 R@1 inside a program vs ≤ .70 for baselines. On SWE-bench Lite every model scores .15, far below BM25 (.32).</div></div>
+    <div class="verdict"><div class="claim">Ignores renaming and reformatting</div>
+      <div class="pills"><span class="pill no">✗ No</span></div>
+      <div class="detail">Every model, ours included, is dominated by identifier names. A renamed correct program almost never looks closer than a one-token bug.</div></div>
+    <div class="verdict"><div class="claim">One model for text ↔ code search</div>
+      <div class="pills"><span class="pill yes">✓ vs base</span><span class="pill no">✗ vs embedders</span></div>
+      <div class="detail">Far better than the base model, but a general embedding model (gte-modernbert) wins every task.</div></div>
+    <div class="verdict"><div class="claim">JEPA objective preserves the language model</div>
+      <div class="pills"><span class="pill yes">✓ Less drift than LM-only</span><span class="pill mid">⚠ All fine-tunes lose</span></div>
+      <div class="detail">JEPA adds no extra drift beyond plain fine-tuning. But fine-tuning on CodeContests costs about 18 points on MBPP for every variant.</div></div>
+  </div>
+</div></section>
+
+<section id="setup"><div class="wrap">
+  <span class="num">Setup</span>
+  <h2>What was compared, and how</h2>
+  <p>All four models share the Qwen2.5-Coder-0.5B architecture. Two are Code-JEPA releases, and two are controls that isolate what the JEPA objective adds.</p>
+  <div class="models">
+    <div class="model"><div class="name"><span class="sw" style="background:var(--c-free)"></span>free</div><p>Code-JEPA. Program-level tokens read <b>all</b> code tokens directly.</p></div>
+    <div class="model"><div class="name"><span class="sw" style="background:var(--c-tree)"></span>tree</div><p>Code-JEPA. Program-level tokens read <b>only the function</b> tokens, so each level is built from the one below.</p></div>
+    <div class="model"><div class="name"><span class="sw" style="background:var(--c-e1)"></span>E1</div><p>Same training data, next-token loss only. Isolates the effect of the alignment objective.</p></div>
+    <div class="model"><div class="name"><span class="sw" style="background:var(--c-e0)"></span>E0</div><p>Qwen2.5-Coder-0.5B as released. The starting point.</p></div>
+  </div>
+
+  <h3>How Code-JEPA reads a program</h3>
+  <p class="small muted">Each tree node gets a special token that sees only its own span (steps, units) or its children. Its vector is trained to match an LLM-written description of that node. No descriptions are needed at inference.</p>
+  <div class="diagram">
+    <svg viewBox="0 0 760 250" role="img" aria-label="Hierarchy: intent and approach over the program, units over functions, steps over blocks, each aligned to a description">
+      <g font-size="13" fill="var(--ink)">
+        <!-- code lines -->
+        <rect x="20" y="196" width="460" height="36" rx="6" fill="var(--surface-2)" stroke="var(--line)"/>
+        <text x="250" y="219" text-anchor="middle" fill="var(--ink-2)" font-family="JetBrains Mono, monospace" font-size="12">code tokens (L4_code)</text>
+        <!-- steps -->
+        <g>
+          <rect x="20" y="140" width="105" height="32" rx="6" fill="var(--surface)" stroke="var(--c-free)"/><text x="72" y="161" text-anchor="middle">step</text>
+          <rect x="138" y="140" width="105" height="32" rx="6" fill="var(--surface)" stroke="var(--c-free)"/><text x="190" y="161" text-anchor="middle">step</text>
+          <rect x="256" y="140" width="105" height="32" rx="6" fill="var(--surface)" stroke="var(--c-free)"/><text x="308" y="161" text-anchor="middle">step</text>
+          <rect x="374" y="140" width="105" height="32" rx="6" fill="var(--surface)" stroke="var(--c-free)"/><text x="426" y="161" text-anchor="middle">step</text>
+        </g>
+        <!-- units -->
+        <rect x="20" y="84" width="223" height="32" rx="6" fill="var(--surface)" stroke="var(--c-free)"/><text x="131" y="105" text-anchor="middle">unit (function)</text>
+        <rect x="256" y="84" width="223" height="32" rx="6" fill="var(--surface)" stroke="var(--c-free)"/><text x="367" y="105" text-anchor="middle">unit (main)</text>
+        <!-- program -->
+        <rect x="20" y="20" width="223" height="40" rx="6" fill="var(--surface)" stroke="var(--c-free)" stroke-width="2"/><text x="131" y="45" text-anchor="middle" font-weight="600">intent</text>
+        <rect x="256" y="20" width="223" height="40" rx="6" fill="var(--surface)" stroke="var(--c-free)" stroke-width="2"/><text x="367" y="45" text-anchor="middle" font-weight="600">approach</text>
+        <!-- connectors -->
+        <g stroke="var(--line)" stroke-width="1.5">
+          <line x1="72" y1="172" x2="72" y2="196"/><line x1="190" y1="172" x2="190" y2="196"/><line x1="308" y1="172" x2="308" y2="196"/><line x1="426" y1="172" x2="426" y2="196"/>
+          <line x1="72" y1="116" x2="72" y2="140"/><line x1="190" y1="116" x2="190" y2="140"/><line x1="308" y1="116" x2="308" y2="140"/><line x1="426" y1="116" x2="426" y2="140"/>
+          <line x1="131" y1="60" x2="131" y2="84"/><line x1="367" y1="60" x2="367" y2="84"/>
+        </g>
+        <!-- descriptions -->
+        <g font-size="12" fill="var(--ink-2)">
+          <line x1="490" y1="40" x2="520" y2="40" stroke="var(--c-ext)" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="528" y="36">“what task it solves”</text><text x="528" y="52">“strategy, data structures, O(·)”</text>
+          <line x1="490" y1="100" x2="520" y2="100" stroke="var(--c-ext)" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="528" y="104">“responsibility + contract”</text>
+          <line x1="490" y1="156" x2="520" y2="156" stroke="var(--c-ext)" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="528" y="160">“one line of pseudocode”</text>
+          <text x="528" y="222" fill="var(--ink-3)">dashed = pulled toward the</text>
+          <text x="528" y="238" fill="var(--ink-3)">description's vector (cosine)</text>
+        </g>
+      </g>
+    </svg>
+  </div>
+  <p class="small muted"><b>free vs tree:</b> in <em>tree</em>, intent/approach see only the unit tokens. In <em>free</em>, they see every code token. Steps and units are identical in both.</p>
+
+  <div class="two">
+    <div class="callout"><b>Fairness</b>Each table reports E0 and E1 at their <em>best</em> of two pooled readouts (middle or last layer, mean over the node's lines). Our models use a fixed readout. Scores are R@1 unless marked MRR. One seed (82) per model.</div>
+    <div class="callout"><b>Data hygiene</b>Trained on 11,448 annotated CodeContests programs. Every eval set is unseen: CodeContests val/test minus 26 overlapping programs, TACO with CodeContests-train matches removed, KodCode test, and external sets (SWE-bench Lite, AdvTest, HumanEval+, MBPP+, CRUXEval, MultiPL-E).</div>
+  </div>
+</div></section>
+
+<section id="s1"><div class="wrap">
+  <span class="num">01</span>
+  <h2>Matching code by algorithm</h2>
+  <p><b>The question:</b> if two programs solve the same problem in different ways, do their program vectors land near each other? Measured on 8,000 TACO programs (4,000 problems, 2 solutions each), zero-shot cosine on centred vectors.</p>
+  <div class="chart" data-chart="s1"></div>
+  <p><b>free</b> roughly doubles same-problem retrieval over the base model. Note that <b>tree</b> collapses here (.07). Its program tokens work in-domain but barely transfer to TACO.</p>
+  <p>Probes for algorithm tags and complexity class show <b>free ≈ E0</b>. The base model already "knows" which algorithm family a program uses. JEPA mainly makes that information directly usable as a nearest-neighbour signal.</p>
+  <details><summary>Full table</summary><div class="tbl"><table>
+    <tr><th></th><th>free</th><th>tree</th><th>E1</th><th>E0 (best)</th></tr>
+    <tr><td>Other solution of same problem ranks first (approach vector)</td><td><b>.54</b></td><td>.07</td><td>.02</td><td>.28</td></tr>
+    <tr><td>Same, intent vector</td><td><b>.63</b></td><td>.07</td><td>.02</td><td>.28</td></tr>
+    <tr><td>Tag overlap of nearest neighbours from other problems, ÷ random</td><td><b>2.92×</b></td><td>1.99×</td><td>1.80×</td><td>2.64×</td></tr>
+    <tr><td>Algorithm-tag probe (12 tags), macro AUC</td><td>.82</td><td>.69</td><td>.67</td><td>.81</td></tr>
+    <tr><td>Complexity-class probe, macro-F1 †</td><td><b>.58</b></td><td>.27</td><td>.22</td><td>.53</td></tr>
+  </table></div><p class="small muted">† Complexity labels come from the same LLM teacher that wrote the training descriptions. Probe rows are 3-fold, grouped by problem.</p></details>
+</div></section>
+
+<section id="s2"><div class="wrap">
+  <span class="num">02</span>
+  <h2>Pointing to the location in the code</h2>
+  <p><b>The question:</b> given a description of one block or function, can the model pick out <em>which</em> block or function it describes? Candidates are the blocks or functions of the same program (or of the edited files, for SWE-bench).</p>
+  <div class="chart" data-chart="s2"></div>
+  <p>Within a single program, both JEPA variants are excellent: ~.86 R@1 vs .43–.71 for the controls, well above chance. This is the clearest win in the report.</p>
+  <div class="callout bad"><b>But it doesn't transfer to real repositories.</b>On SWE-bench Lite (issue → edited function, 272 issues) every model, including E0, scores .15. That's above chance (.06) but far below simple BM25 (.32) and gte-modernbert (.39).</div>
+  <div class="callout warn"><b>Caveat that favours us</b>The in-program descriptions are LLM-written in the training style. E0/E1 use a ridge probe trained on other TACO problems. Ours are zero-shot in the shared 256-d space (or a ridge probe on raw vectors).</div>
+  <details><summary>Full table</summary><div class="tbl"><table>
+    <tr><th></th><th>free</th><th>tree</th><th>E1</th><th>E0 (best)</th><th>chance</th></tr>
+    <tr><td>Step description → its block: CodeContests</td><td><b>.86</b></td><td>.81</td><td>.60</td><td>.58</td><td>.12</td></tr>
+    <tr><td>Step description → its block: TACO</td><td><b>.88</b></td><td>.84</td><td>.71</td><td>.70</td><td>.15</td></tr>
+    <tr><td>Function description → its function: KodCode</td><td><b>.86</b></td><td>.77</td><td>.43</td><td>.49</td><td>.20</td></tr>
+    <tr><td>Function description → its function: TACO</td><td><b>.86</b></td><td>.78</td><td>.61</td><td>.62</td><td>.19</td></tr>
+    <tr><td>SWE-bench Lite: issue → edited function</td><td>.15</td><td>.15</td><td>.15</td><td>.15</td><td>.06</td></tr>
+  </table></div><p class="small muted">SWE-bench references: BM25 .32, UniXcoder .21, gte-modernbert .39.</p></details>
+</div></section>
+
+<section id="s3"><div class="wrap">
+  <span class="num">03</span>
+  <h2>Robustness to renaming and reformatting</h2>
+  <p><b>The question:</b> does the representation track <em>behaviour</em> or <em>surface form</em>? We built 703 test-checked variants: renamed and reformatted copies that still pass, and one-token mutants that fail.</p>
+  <div class="two">
+    <div class="stat"><div class="k">Renamed correct copy closer than a broken mutant</div><div class="v">3% <small>free</small> · 0% <small>E0</small></div></div>
+    <div class="stat"><div class="k">Reformatted correct copy closer than a broken mutant</div><div class="v">28% <small>free</small> · 14% <small>E0</small></div></div>
+  </div>
+  <p style="margin-top:14px">Changing every name moves the vector far more than a bug that breaks the program. Both models still notice <em>where</em> the bug is: the most-moved step is the mutated one 91% (free) / 88% (E0) of the time, vs 20% chance.</p>
+  <h3>AdvTest: what happens when identifiers are anonymised</h3>
+  <p class="small muted">6,000 functions, docstring → function, MRR. Identifiers replaced with <code>Func</code> / <code>arg_i</code>.</p>
+  <div class="chart" data-chart="s3"></div>
+  <p>Our models lose 75–85% of their score when names are removed. The dedicated embedders lose ~35%. Right now, much of what our vectors encode is identifier names, not semantics.</p>
+</div></section>
+
+<section id="s4"><div class="wrap">
+  <span class="num">04</span>
+  <h2>One model for text and code, vs dedicated embedders</h2>
+  <p><b>The question:</b> can the shared code/description space replace a dedicated text ↔ code retriever? MRR.</p>
+  <div class="chart" data-chart="s4"></div>
+  <p><b>free</b> beats E0 and UniXcoder on problem-to-solution search. However, <b>gte-modernbert</b>, a general embedding model, wins every row by a wide margin. <b>tree</b> is near zero on problem statements, the same transfer failure seen in §1.</p>
+  <p class="small muted">jina-code and CodeRankEmbed weren't tested because they need <code>trust_remote_code</code>.</p>
+</div></section>
+
+<section id="s5"><div class="wrap">
+  <span class="num">05</span>
+  <h2>Language-model drift vs the original model</h2>
+  <p><b>The question:</b> Code-JEPA shares its backbone with a language model. Did the alignment objective damage it? Teacher-forced perplexity on the same tokens, plus KL from E0 (nats/token).</p>
+  <div class="chart" data-chart="s5"></div>
+  <p>The key comparison is <b>JEPA vs E1</b>, since both saw the same data. <b>tree</b> has the lowest KL on every corpus, and <b>free</b> is at or below E1 everywhere except WikiText (.284 vs .283). <b>The alignment objective adds no drift.</b></p>
+  <p>The ~30% perplexity increase on general Python (CodeSearchNet 5.6 → 7.4) and English (WikiText 12.8 → 17) comes from fine-tuning on CodeContests. E1 shows it too.</p>
+  <details><summary>Full table</summary><div class="tbl"><table>
+    <tr><th>Corpus</th><th>E0 ppl</th><th>free ppl</th><th>tree ppl</th><th>E1 ppl</th><th>KL free / tree / E1</th></tr>
+    <tr><td>CodeContests eval code</td><td>2.47</td><td>2.40</td><td>2.39</td><td>2.40</td><td>.147 / <b>.134</b> / .162</td></tr>
+    <tr><td>Training format (intent + approach → code)</td><td>2.33</td><td>2.12</td><td>2.11</td><td>2.12</td><td>.291 / <b>.272</b> / .296</td></tr>
+    <tr><td>TACO code</td><td>2.40</td><td>2.47</td><td>2.45</td><td>2.46</td><td>.115 / <b>.106</b> / .131</td></tr>
+    <tr><td>CodeSearchNet Python</td><td>5.61</td><td>7.42</td><td>7.37</td><td>7.55</td><td>.270 / <b>.258</b> / .307</td></tr>
+    <tr><td>WikiText-2</td><td>12.8</td><td>17.1</td><td>16.8</td><td>17.1</td><td>.284 / <b>.265</b> / .283</td></tr>
+  </table></div><p class="small muted">Top-1 next-token agreement with E0 is 0.75–0.92. The new node tokens get essentially no probability (&lt; 2×10⁻⁸).</p></details>
+</div></section>
+
+<section id="s6"><div class="wrap">
+  <span class="num">06</span>
+  <h2>Code generation</h2>
+  <p><b>The question:</b> does the model still write code? Greedy pass@1 (%).</p>
+  <div class="chart" data-chart="s6"></div>
+  <p>On standard benchmarks the base model wins almost everywhere. The fine-tunes win only on in-domain CodeContests, especially with the training-style prompt. Among the fine-tunes, JEPA ≈ E1, which again shows that the cost comes from the data, not the objective.</p>
+  <div class="callout warn"><b>Why MBPP drops (and why it looks fixable)</b>Fine-tuned models often ignore the function name the test requires: 60–87 of 378 MBPP outputs use the wrong name, vs 17 for E0. That's a side effect of training only on stdin/stdout CodeContests programs.</div>
+  <details><summary>Full table</summary><div class="tbl"><table>
+    <tr><th></th><th>HumanEval</th><th>HE+</th><th>MBPP</th><th>MBPP+</th><th>CRUX-O</th><th>CRUX-I</th><th>C++</th><th>JS</th><th>CodeContests</th><th>CC guided ‡</th></tr>
+    <tr><td>E0</td><td>26.8</td><td><b>22.6</b></td><td><b>55.0</b></td><td><b>48.4</b></td><td><b>25.0</b></td><td><b>26.5</b></td><td><b>24.2</b></td><td><b>27.3</b></td><td>0.9</td><td>0.0</td></tr>
+    <tr><td>E1</td><td>23.8</td><td>18.3</td><td>38.1</td><td>33.1</td><td>20.1</td><td>21.5</td><td>21.7</td><td>13.7</td><td><b>3.6</b></td><td>9.0</td></tr>
+    <tr><td>tree</td><td><b>27.4</b></td><td>22.0</td><td>34.9</td><td>29.1</td><td>19.8</td><td>23.1</td><td>20.5</td><td>16.8</td><td>2.7</td><td>8.1</td></tr>
+    <tr><td>free</td><td>25.6</td><td>20.7</td><td>37.3</td><td>31.0</td><td>18.6</td><td>22.0</td><td>21.7</td><td>14.9</td><td>0.9</td><td><b>9.9</b></td></tr>
+  </table></div><p class="small muted">HumanEval/MBPP scored with EvalPlus. C++/JS are MultiPL-E HumanEval. CodeContests: 111 problems with stdin/stdout tests. ‡ Uses the training prompt (gold intent + approach), so it isn't a standard metric. E0's HumanEval (26.8) is close to Qwen's published 28.0.</p></details>
+</div></section>
+
+<section id="caveats"><div class="wrap">
+  <span class="num">Caveats</span>
+  <h2>What to keep in mind</h2>
+  <ul class="tight">
+    <li><b>One seed per model.</b> Seeds 23 and 37 exist and can be exported and added.</li>
+    <li>The rename-vs-mutant test pits renaming <em>every</em> identifier against changing <em>one</em> token, which is deliberately hard. Reformatting is the gentler version.</li>
+    <li>AdvTest uses 6,000 of the 9,826 test functions, the ones that could be matched to their original source.</li>
+    <li>LiveCodeBench wasn't run. Its private tests are pickled, and loading them would execute downloaded code.</li>
+    <li>Training data is competitive programming only. Production-style code (multi-file, long identifiers, libraries) is out of distribution, which is likely part of why SWE-bench is flat.</li>
+  </ul>
+  <p class="small muted">Source: <code>docs/BENCHMARKS_2026-11-15.md</code>. Release notes: <code>docs/RELEASE_2026-11-13.md</code>.</p>
+</div></section>
+</main>
+
+<footer><div class="wrap">Code-JEPA · benchmark explainer generated from the 2026-11-15 report.</div></footer>
+
+<script>
+const M = {
+  free:{label:'free', c:'--c-free'}, tree:{label:'tree', c:'--c-tree'},
+  E1:{label:'E1', c:'--c-e1'}, E0:{label:'E0 (best)', c:'--c-e0'},
+  unix:{label:'UniXcoder', c:'--c-ext'}, gte:{label:'gte-modernbert', c:'--c-ext2'},
+  bm25:{label:'BM25', c:'--c-ext'}
+};
+const CHARTS = {
+  s1:{title:'Same-problem retrieval on TACO', sub:'R@1: the other solution of the same problem ranks first', max:.7, fmt:v=>v.toFixed(2),
+    models:['free','tree','E1','E0'],
+    groups:[
+      {label:'Approach vector', v:{free:.54,tree:.07,E1:.02,E0:.28}},
+      {label:'Intent vector', v:{free:.63,tree:.07,E1:.02,E0:.28}},
+      {label:'Complexity-class probe (macro-F1)', v:{free:.58,tree:.27,E1:.22,E0:.53}},
+    ]},
+  s2:{title:'Description → location inside a program', sub:'R@1. Dashed line = chance', max:1, fmt:v=>v.toFixed(2),
+    models:['free','tree','E1','E0'],
+    groups:[
+      {label:'Step → block · CodeContests', chance:.12, v:{free:.86,tree:.81,E1:.60,E0:.58}},
+      {label:'Step → block · TACO', chance:.15, v:{free:.88,tree:.84,E1:.71,E0:.70}},
+      {label:'Function → function · KodCode', chance:.20, v:{free:.86,tree:.77,E1:.43,E0:.49}},
+      {label:'Function → function · TACO', chance:.19, v:{free:.86,tree:.78,E1:.61,E0:.62}},
+      {label:'SWE-bench Lite · issue → edited function', chance:.06, v:{free:.15,tree:.15,E1:.15,E0:.15,bm25:.32,gte:.39}, extra:['bm25','gte']},
+    ]},
+  s3:{title:'AdvTest MRR, before → after anonymising identifiers', sub:'Light bar = original names · solid bar = anonymised', max:.8, fmt:v=>v.toFixed(2), paired:true,
+    models:['free','tree','E0','unix','gte'],
+    groups:[
+      {label:'free', m:'free', a:.40, b:.10},
+      {label:'tree', m:'tree', a:.37, b:.05},
+      {label:'E0 (best)', m:'E0', a:.13, b:.07},
+      {label:'UniXcoder', m:'unix', a:.51, b:.35},
+      {label:'gte-modernbert', m:'gte', a:.79, b:.50},
+    ]},
+  s4:{title:'Text ↔ code search', sub:'MRR', max:1, fmt:v=>v.toFixed(2),
+    models:['free','tree','E0','unix','gte'],
+    groups:[
+      {label:'Problem statement → solutions · TACO', v:{free:.32,tree:.00,E0:.10,unix:.12,gte:.67}},
+      {label:'Problem statement → solutions · CodeContests', v:{free:.66,tree:.11,E0:.29,unix:.16,gte:.90}},
+      {label:'AdvTest (original identifiers)', v:{free:.40,tree:.37,E0:.13,unix:.51,gte:.79}},
+    ]},
+  s5:{title:'KL divergence from the base model', sub:'nats/token · lower = closer to E0', max:.32, fmt:v=>v.toFixed(3), lowerBetter:true,
+    models:['free','tree','E1'],
+    groups:[
+      {label:'CodeContests eval code', v:{free:.147,tree:.134,E1:.162}},
+      {label:'Training format', v:{free:.291,tree:.272,E1:.296}},
+      {label:'TACO code', v:{free:.115,tree:.106,E1:.131}},
+      {label:'CodeSearchNet Python', v:{free:.270,tree:.258,E1:.307}},
+      {label:'WikiText-2', v:{free:.284,tree:.265,E1:.283}},
+    ]},
+  s6:{title:'Greedy pass@1 (%)', sub:'Selected benchmarks. Full table below', max:60, fmt:v=>v.toFixed(1),
+    models:['free','tree','E1','E0'],
+    groups:[
+      {label:'HumanEval+', v:{free:20.7,tree:22.0,E1:18.3,E0:22.6}},
+      {label:'MBPP+', v:{free:31.0,tree:29.1,E1:33.1,E0:48.4}},
+      {label:'MultiPL-E JS', v:{free:14.9,tree:16.8,E1:13.7,E0:27.3}},
+      {label:'CodeContests, guided (in-domain)', v:{free:9.9,tree:8.1,E1:9.0,E0:0.0}},
+    ]},
+};
+function el(t,c,h){const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e}
+function render(node, spec){
+  node.appendChild(el('div','chart-title',spec.title));
+  node.appendChild(el('div','chart-sub',spec.sub));
+  const used = new Set(spec.models); spec.groups.forEach(g=>(g.extra||[]).forEach(x=>used.add(x)));
+  const lg = el('div','legend');
+  [...used].forEach(k=>lg.appendChild(el('span',null,`<i class="sw" style="background:var(${M[k].c})"></i>${M[k].label}`)));
+  node.appendChild(lg);
+  spec.groups.forEach(g=>{
+    const G = el('div','group');
+    if(spec.paired){
+      G.appendChild(el('div','group-label',g.label));
+      [['original',g.a,.35],['anonymised',g.b,1]].forEach(([who,v,op])=>{
+        const r = el('div','bar-row'+(op===1?' best':''));
+        r.appendChild(el('div','who',who));
+        const t = el('div','track'); const b = el('div','bar');
+        b.style.width = (v/spec.max*100)+'%'; b.style.background=`var(${M[g.m].c})`; b.style.opacity=op;
+        t.appendChild(b); r.appendChild(t); r.appendChild(el('div','val',spec.fmt(v))); G.appendChild(r);
+      });
+    } else {
+      G.appendChild(el('div','group-label',g.label));
+      const keys = [...spec.models, ...(g.extra||[])].filter(k=>g.v[k]!=null);
+      const vals = keys.map(k=>g.v[k]);
+      const best = spec.lowerBetter ? Math.min(...vals) : Math.max(...vals);
+      keys.forEach(k=>{
+        const v=g.v[k];
+        const r = el('div','bar-row'+(v===best?' best':''));
+        r.appendChild(el('div','who',M[k].label));
+        const t = el('div','track'); const b = el('div','bar');
+        b.style.width = Math.max(v/spec.max*100,.3)+'%'; b.style.background=`var(${M[k].c})`;
+        t.appendChild(b);
+        if(g.chance!=null){const c=el('div','chance-mark');c.style.left=(g.chance/spec.max*100)+'%';c.title='chance '+g.chance;t.appendChild(c)}
+        r.appendChild(t); r.appendChild(el('div','val',spec.fmt(v))); G.appendChild(r);
+      });
+    }
+    node.appendChild(G);
+  });
+}
+document.querySelectorAll('[data-chart]').forEach(n=>render(n, CHARTS[n.dataset.chart]));
+
+const btn=document.getElementById('themeBtn');
+function applyTheme(t){ if(t) document.documentElement.setAttribute('data-theme',t); }
+try{ applyTheme(localStorage.getItem('cj-theme')); }catch(e){}
+btn.addEventListener('click',()=>{
+  const cur = document.documentElement.getAttribute('data-theme') ||
+    (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  const nxt = cur==='dark'?'light':'dark'; applyTheme(nxt);
+  try{ localStorage.setItem('cj-theme',nxt);}catch(e){}
+});
+</script>
+</body>
+</html>
