@@ -132,7 +132,7 @@ Teacher-forced on the same tokens. KL is in nats per token, over the shared voca
 
 ## Reproduce (on tzag)
 
-Benchmark code: `/mnt/storage/users/glifshitz/code-jepa/bench/`. It sits outside `repo/` because the sync script deletes files there.
+Benchmark code: [`bench/`](../bench/) in this repo (see its README). On tzag the working copy is `/mnt/storage/users/glifshitz/code-jepa/bench/`.
 
 Results JSON: `runs/bench/results/{b1,b2,b3,b4,lm,codegen}.json`.
 
