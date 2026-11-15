@@ -125,7 +125,7 @@ footer{padding:32px 0 56px;color:var(--ink-3);font-size:13px}
     <h1>What did JEPA training buy us, and what did it cost?</h1>
     <p class="lede">We fine-tuned Qwen2.5-Coder-0.5B so that every block, function and whole program gets a vector that matches its plain-English description. This page walks through where those vectors beat the model we started from, where they don't, and how much the language model degraded along the way.</p>
     <nav class="toc">
-      <a href="#tldr">TL;DR</a><a href="#setup">Setup</a><a href="#s1">1 · Algorithm matching</a><a href="#s2">2 · Localisation</a><a href="#s3">3 · Robustness</a><a href="#s4">4 · vs. embedders</a><a href="#s5">5 · LM drift</a><a href="#s6">6 · Code generation</a><a href="#caveats">Caveats</a>
+      <a href="#tldr">TL;DR</a><a href="#setup">Setup</a><a href="#s1">1 · Algorithm matching</a><a href="#s2">2 · Localisation</a><a href="#s3">3 · Robustness</a><a href="#s4">4 · vs. embedders</a><a href="#s5">5 · LM drift</a><a href="#s6">6 · Code generation</a><a href="#caveats">Caveats</a><a href="#reproduce">Reproduce</a>
     </nav>
   </div>
 </header>
@@ -316,7 +316,23 @@ footer{padding:32px 0 56px;color:var(--ink-3);font-size:13px}
     <li>LiveCodeBench wasn't run. Its private tests are pickled, and loading them would execute downloaded code.</li>
     <li>Training data is competitive programming only. Production-style code (multi-file, long identifiers, libraries) is out of distribution, which is likely part of why SWE-bench is flat.</li>
   </ul>
-  <p class="small muted">Source: <code>docs/BENCHMARKS_2026-11-15.md</code>. Release notes: <code>docs/RELEASE_2026-11-13.md</code>.</p>
+  <p class="small muted">Source: <a href="https://github.com/gallif/code-jepa/blob/bench-code/docs/BENCHMARKS_2026-11-15.md"><code>docs/BENCHMARKS_2026-11-15.md</code></a>. Release notes: <code>docs/RELEASE_2026-11-13.md</code>.</p>
+</div></section>
+
+<section id="reproduce"><div class="wrap">
+  <span class="num">Reproduce</span>
+  <h2>Running the benchmarks</h2>
+  <p>The benchmark code is in <a href="https://github.com/gallif/code-jepa/tree/bench-code/bench"><code>bench/</code></a> (see its README). Results are written to <code>runs/bench/results/{b1,b2,b3,b4,lm,codegen}.json</code>.</p>
+  <div class="tbl"><table>
+    <tr><th>Step</th><th style="text-align:left">Script</th></tr>
+    <tr><td>Build the unseen evaluation pools</td><td style="text-align:left"><code>bench/prep_pools.py</code></td></tr>
+    <tr><td>Generate test-checked renamed / reformatted variants and mutants</td><td style="text-align:left"><code>bench/variants.py</code></td></tr>
+    <tr><td>Encode pools (TACO, CodeContests eval, KodCode test, variants, AdvTest, SWE-bench functions)</td><td style="text-align:left"><code>bench/encode_pool.py</code></td></tr>
+    <tr><td>Encode with external baselines (UniXcoder, gte-modernbert)</td><td style="text-align:left"><code>bench/encode_external.py</code></td></tr>
+    <tr><td>Benchmarks 1–4</td><td style="text-align:left"><code>bench/evaluate.py all</code></td></tr>
+    <tr><td>Perplexity + KL vs E0</td><td style="text-align:left"><code>bench/lm_eval.py</code></td></tr>
+    <tr><td>Code generation + scoring</td><td style="text-align:left"><code>bench/codegen.py</code>, <code>score_evalplus.sh</code>, <code>score_gen.py</code></td></tr>
+  </table></div>
 </div></section>
 </main>
 
