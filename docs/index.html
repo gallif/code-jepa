@@ -316,13 +316,13 @@ footer{padding:32px 0 56px;color:var(--ink-3);font-size:13px}
     <li>LiveCodeBench wasn't run. Its private tests are pickled, and loading them would execute downloaded code.</li>
     <li>Training data is competitive programming only. Production-style code (multi-file, long identifiers, libraries) is out of distribution, which is likely part of why SWE-bench is flat.</li>
   </ul>
-  <p class="small muted">Source: <a href="https://github.com/gallif/code-jepa/blob/bench-code/docs/BENCHMARKS_2026-11-15.md"><code>docs/BENCHMARKS_2026-11-15.md</code></a>. Release notes: <code>docs/RELEASE_2026-11-13.md</code>.</p>
+  <p class="small muted">Source: <a href="https://github.com/gallif/code-jepa/blob/main/docs/BENCHMARKS_2026-11-15.md"><code>docs/BENCHMARKS_2026-11-15.md</code></a>. Release notes: <code>docs/RELEASE_2026-11-13.md</code>.</p>
 </div></section>
 
 <section id="reproduce"><div class="wrap">
   <span class="num">Reproduce</span>
   <h2>Running the benchmarks</h2>
-  <p>The benchmark code is in <a href="https://github.com/gallif/code-jepa/tree/bench-code/bench"><code>bench/</code></a> (see its README). Results are written to <code>runs/bench/results/{b1,b2,b3,b4,lm,codegen}.json</code>.</p>
+  <p>The benchmark code is in <a href="https://github.com/gallif/code-jepa/tree/main/bench"><code>bench/</code></a> (see its README). Results are written to <code>runs/bench/results/{b1,b2,b3,b4,lm,codegen}.json</code>.</p>
   <div class="tbl"><table>
     <tr><th>Step</th><th style="text-align:left">Script</th></tr>
     <tr><td>Build the unseen evaluation pools</td><td style="text-align:left"><code>bench/prep_pools.py</code></td></tr>

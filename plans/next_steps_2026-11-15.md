@@ -1,7 +1,7 @@
 # Next steps after the 2026-11-15 benchmarks: framing and runs
 
 For the agent picking this up. Read `AGENTS.md` first (its hard constraints still apply), then
-`docs/BENCHMARKS_2026-11-15.md`. The benchmark code is in `bench/` on the `bench-code` branch.
+`docs/BENCHMARKS_2026-11-15.md`. The benchmark code is in `bench/`.
 
 This file says what paper we are now aiming for and which runs decide whether it holds. It replaces the
 "better code model" goal in `plans/code_jepa_research_plan.md` §1. It does not change the training recipe.
