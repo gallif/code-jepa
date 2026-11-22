@@ -2,6 +2,8 @@
 
 This file is for incoming agents. Read it before changing training, data packing, or remote runs. Canonical research writeup is `plans/code_jepa_research_plan.md`; the paper draft is `paper/draft.tex`. Do not treat this file as a substitute for those.
 
+**Current direction (2026-11-15):** read `plans/next_steps_2026-11-15.md` for the paper framing (better vectors for code, not a better coder) and the ordered list of runs that follow the benchmark report.
+
 ## What we are building
 
 A **span-grounded hierarchical LLM-JEPA** on a collaborator's Python hierarchy JSONL (111.5k programs: CodeContests, TACO, KodCode). Not a reproduction of vision H-JEPA or of NCM generation.
